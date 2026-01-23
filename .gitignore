@@ -1,0 +1,22 @@
+# Go项目构建输出目录
+*.exe
+*.out
+*.app
+build/
+dist/
+
+# 临时文件
+tmp/
+temp/
+
+# 日志文件
+*.log
+
+# 编辑器文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 环境变量
+.env
