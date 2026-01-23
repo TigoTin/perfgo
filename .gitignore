@@ -20,3 +20,5 @@ temp/
 
 # 环境变量
 .env
+
+perfgo*

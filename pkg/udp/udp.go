@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"perfgo/pkg/utils"
 )
 
 // UDPPacket 表示UDP数据包
@@ -71,7 +73,7 @@ func (ut *UDPTester) UDPBandwidthTest(conn *net.UDPConn) error {
 	fmt.Printf("  测试时长: %.2fs\n", elapsed.Seconds())
 	fmt.Printf("  发送数据包数: %d\n", sentPackets)
 	fmt.Printf("  总字节数: %d\n", totalBytes)
-	fmt.Printf("  速度: %.2f 字节/秒 (%.2f Mbps)\n", throughput, throughput*8/1024/1024)
+	fmt.Printf("  速度: %s\n", utils.FormatSpeedDetailed(throughput))
 
 	return nil
 }
@@ -134,7 +136,7 @@ func (ut *UDPTester) UDPBandwidthTestWithDuration(conn *net.UDPConn, threads int
 			totalBytes := int64(sentPackets * packetSize)
 			throughput := float64(totalBytes) / elapsed.Seconds()
 
-			fmt.Printf("  线程 %d 完成: 时长: %.2fs, 数据包数: %d, 速度: %.2f 字节/秒 (%.2f Mbps)\n", threadID, elapsed.Seconds(), sentPackets, throughput, throughput*8/1024/1024)
+			fmt.Printf("  线程 %d 完成: 时长: %.2fs, 数据包数: %d, 速度: %s\n", threadID, elapsed.Seconds(), sentPackets, utils.FormatSpeedDetailed(throughput))
 			results <- nil
 		}(i)
 	}
@@ -364,8 +366,8 @@ func (ut *UDPTester) UDPBandwidthTestWithBandwidth(conn *net.UDPConn, threads in
 			elapsed := time.Since(startTime)
 			throughput := float64(sentBytes) / elapsed.Seconds()
 
-			fmt.Printf("  线程 %d 完成: 时长: %.2fs, 数据包数: %d, 实际速度: %.2f 字节/秒 (%.2f Mbps)\n",
-				threadID, elapsed.Seconds(), sentPackets, throughput, throughput*8/1024/1024)
+			fmt.Printf("  线程 %d 完成: 时长: %.2fs, 数据包数: %d, 实际速度: %s\n",
+				threadID, elapsed.Seconds(), sentPackets, utils.FormatSpeedDetailed(throughput))
 			results <- nil
 		}(i)
 	}

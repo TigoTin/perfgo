@@ -34,6 +34,20 @@ func FormatSpeed(bytesPerSec float64) string {
 	return fmt.Sprintf("%.2f %s", speed, units[unitIndex])
 }
 
+// FormatSpeedMbps 将速度格式化为Mbps（兆比特每秒）格式
+func FormatSpeedMbps(bytesPerSec float64) string {
+	// 将字节每秒转换为比特每秒，然后转换为Mbps
+	mbps := bytesPerSec * 8 / 1000 / 1000
+	return fmt.Sprintf("%.2f Mbps", mbps)
+}
+
+// FormatSpeedDetailed 将速度格式化为人类可读的详细格式，同时显示MB/s和Mbps
+func FormatSpeedDetailed(bytesPerSec float64) string {
+	basicFormat := FormatSpeed(bytesPerSec)
+	mbpsFormat := FormatSpeedMbps(bytesPerSec)
+	return fmt.Sprintf("%s (%s)", basicFormat, mbpsFormat)
+}
+
 // ParseDuration 解析持续时间字符串
 func ParseDuration(durationStr string) (time.Duration, error) {
 	duration, err := time.ParseDuration(durationStr)

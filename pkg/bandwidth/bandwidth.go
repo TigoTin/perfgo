@@ -3,7 +3,6 @@ package bandwidth
 import (
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"sync"
 	"time"
@@ -151,7 +150,29 @@ func (bt *BandwidthTester) UploadTest(conn net.Conn, threads int) error {
 	fmt.Printf("  测试时长: %.2fs\n", elapsed.Seconds())
 	fmt.Printf("  线程数: %d\n", threads)
 	fmt.Printf("  发送字节数: %s\n", utils.FormatBytes(totalBytes))
-	fmt.Printf("  速度: %s\n", utils.FormatSpeed(throughput))
+	fmt.Printf("  速度: %s\n", utils.FormatSpeedDetailed(throughput))
+
+	// 在带宽测试完成后，清理连接上的任何残留数据
+	// 设置一个短超时来读取可能的残留数据
+	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	buf := make([]byte, 1024)
+	for {
+		n, err := conn.Read(buf)
+		if err != nil {
+			// 如果是超时错误，表示没有更多数据
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				break
+			}
+			// 其他错误则跳出
+			break
+		}
+		// 如果读取到数据，继续读取直到没有更多数据
+		if n == 0 {
+			break
+		}
+	}
+	// 重置读取超时
+	conn.SetReadDeadline(time.Time{})
 
 	return nil
 }
@@ -194,9 +215,7 @@ func (bt *BandwidthTester) DownloadTest(conn net.Conn, threads int) error {
 				default:
 					n, err := conn.Read(buffer)
 					if err != nil {
-						if err == io.EOF {
-							break
-						}
+						// 不再处理EOF，因为带宽测试期间连接不应关闭
 						mu.Lock()
 						totalBytes = threadBytes
 						mu.Unlock()
@@ -241,9 +260,7 @@ func (bt *BandwidthTester) DownloadTest(conn net.Conn, threads int) error {
 					default:
 						n, err := conn.Read(buffer)
 						if err != nil {
-							if err == io.EOF {
-								break
-							}
+							// 不再处理EOF，因为带宽测试期间连接不应关闭
 							fmt.Printf("下载线程 %d 错误: %v\n", i, err)
 							goto finish
 						}
@@ -275,7 +292,29 @@ func (bt *BandwidthTester) DownloadTest(conn net.Conn, threads int) error {
 	fmt.Printf("  测试时长: %.2fs\n", elapsed.Seconds())
 	fmt.Printf("  线程数: %d\n", threads)
 	fmt.Printf("  接收字节数: %s\n", utils.FormatBytes(totalBytes))
-	fmt.Printf("  速度: %s\n", utils.FormatSpeed(throughput))
+	fmt.Printf("  速度: %s\n", utils.FormatSpeedDetailed(throughput))
+
+	// 在带宽测试完成后，清理连接上的任何残留数据
+	// 设置一个短超时来读取可能的残留数据
+	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	buf := make([]byte, 1024)
+	for {
+		n, err := conn.Read(buf)
+		if err != nil {
+			// 如果是超时错误，表示没有更多数据
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				break
+			}
+			// 其他错误则跳出
+			break
+		}
+		// 如果读取到数据，继续读取直到没有更多数据
+		if n == 0 {
+			break
+		}
+	}
+	// 重置读取超时
+	conn.SetReadDeadline(time.Time{})
 
 	return nil
 }
