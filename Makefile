@@ -48,3 +48,38 @@ install:
 .PHONY: race
 race:
 	go run -race main.go
+
+# 交叉编译 - Windows 64位
+.PHONY: build-windows-amd64
+build-windows-amd64:
+	GOOS=windows GOARCH=amd64 go build -o bin/perfgo-windows-amd64.exe .
+
+# 交叉编译 - Linux 64位
+.PHONY: build-linux-amd64
+build-linux-amd64:
+	GOOS=linux GOARCH=amd64 go build -o bin/perfgo-linux-amd64 .
+
+# 交叉编译 - Linux ARM64
+.PHONY: build-linux-arm64
+build-linux-arm64:
+	GOOS=linux GOARCH=arm64 go build -o bin/perfgo-linux-arm64 .
+
+# 交叉编译 - macOS 64位
+.PHONY: build-darwin-amd64
+build-darwin-amd64:
+	GOOS=darwin GOARCH=amd64 go build -o bin/perfgo-darwin-amd64 .
+
+# 交叉编译 - macOS ARM64
+.PHONY: build-darwin-arm64
+build-darwin-arm64:
+	GOOS=darwin GOARCH=arm64 go build -o bin/perfgo-darwin-arm64 .
+
+# 交叉编译 - 所有平台
+.PHONY: build-all
+build-all: build-windows-amd64 build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-arm64
+
+# 简化的构建命令，带版本信息
+.PHONY: build-release
+build-release:
+	@mkdir -p bin
+	go build -ldflags="-X main.Version=`git describe --tags --abbrev=0 2>/dev/null || echo 'v1.0.0'` -X main.BuildTime=`date -u +%Y-%m-%dT%H:%M:%SZ`" -o bin/perfgo .

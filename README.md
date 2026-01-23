@@ -71,9 +71,75 @@ go run main.go -mode=client -host=localhost -port=5432 -test=udp-latency
 
 ## 构建
 
+### 简单构建
 运行以下命令构建可执行文件：
 ```bash
 go build -o perfgo .
+```
+
+### 使用Makefile构建
+Perfgo提供了丰富的Makefile命令来简化构建过程：
+
+```bash
+# 构建默认平台版本
+make build
+
+# 构建特定平台版本
+make build-windows-amd64    # Windows 64位
+make build-linux-amd64      # Linux 64位
+make build-linux-arm64      # Linux ARM64
+make build-darwin-amd64     # macOS 64位
+make build-darwin-arm64     # macOS ARM64
+
+# 构建所有平台版本
+make build-all
+
+# 构建带版本信息的发布版
+make build-release
+```
+
+### 交叉编译
+Perfgo支持跨平台编译，可以为不同操作系统和架构构建二进制文件：
+
+**Linux/macOS:**
+```bash
+# 使用构建脚本
+chmod +x scripts/build-cross-platform.sh
+./scripts/build-cross-platform.sh v1.1.0
+```
+
+**Windows:**
+```powershell
+# 使用PowerShell脚本
+powershell -ExecutionPolicy Bypass -File scripts\build-cross-platform.ps1 -Version v1.1.0
+```
+
+构建的二进制文件将放在 `dist/` 目录中。
+
+### Docker部署
+Perfgo还支持Docker容器化部署：
+
+```bash
+# 构建Docker镜像
+docker build -t perfgo .
+
+# 以服务器模式运行
+docker run -d --name perfgo-server -p 5432:5432 perfgo -mode=server
+
+# 以客户端模式运行
+docker run --rm perfgo -mode=client -host=<server-ip> -test=bandwidth-upload
+```
+
+使用docker-compose快速部署：
+```bash
+# 启动服务器和客户端
+docker-compose up -d
+
+# 查看日志
+docker-compose logs -f
+
+# 只启动服务器
+docker-compose up -d perfgo-server
 ```
 
 ## 依赖

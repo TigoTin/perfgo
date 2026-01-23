@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  perfgo-server:
+    build: .
+    container_name: perfgo-server
+    ports:
+      - "5432:5432/tcp"
+      - "5432:5432/udp"
+    command: ["-mode=server", "-port=5432"]
+    restart: unless-stopped
+    networks:
+      - perfgo-net
+
+  perfgo-client:
+    build: .
+    container_name: perfgo-client
+    depends_on:
+      - perfgo-server
+    command: ["-mode=client", "-host=perfgo-server", "-port=5432", "-test=bandwidth-upload", "-threads=4"]
+    restart: "no"
+    networks:
+      - perfgo-net
+
+networks:
+  perfgo-net:
+    driver: bridge

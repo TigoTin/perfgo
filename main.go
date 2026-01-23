@@ -9,6 +9,15 @@ import (
 	"perfgo/cmd"
 )
 
+// Version 版本信息，在构建时注入
+var Version = "v1.0.0"
+
+// BuildTime 构建时间，在构建时注入
+var BuildTime = ""
+
+// GitCommit Git提交信息，在构建时注入
+var GitCommit = ""
+
 var (
 	mode      = flag.String("mode", "client", "运行模式: server 或 client")
 	host      = flag.String("host", "localhost", "服务器主机地址 (客户端模式)")
@@ -48,7 +57,14 @@ func main() {
 }
 
 func showHelp() {
-	fmt.Println("Perfgo - 网络质量测试工具")
+	versionStr := Version
+	if BuildTime != "" {
+		versionStr += " (" + BuildTime + ")"
+	}
+	if GitCommit != "" {
+		versionStr += " [" + GitCommit + "]"
+	}
+	fmt.Printf("Perfgo - 网络质量测试工具 v%s\n", versionStr)
 	fmt.Println()
 	fmt.Println("用法:")
 	fmt.Println("  服务器模式: go run main.go -mode=server -port=5432 [-localip=0.0.0.0]")
