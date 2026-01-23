@@ -10,14 +10,15 @@ import (
 )
 
 var (
-	mode     = flag.String("mode", "client", "运行模式: server 或 client")
-	host     = flag.String("host", "localhost", "服务器主机地址 (客户端模式)")
-	port     = flag.String("port", "5432", "服务器端口")
-	test     = flag.String("test", "bandwidth", "测试类型: bandwidth-upload, bandwidth-download, latency-ping, latency-jitter, packetloss, udp-bandwidth, udp-latency")
-	threads  = flag.Int("threads", 1, "并发线程数 (仅用于带宽测试)")
-	localIP  = flag.String("localip", "", "本地IP地址 (可选，用于指定源IP进行测试)")
-	duration = flag.Int("duration", 10, "测试持续时间 (秒)")
-	help     = flag.Bool("help", false, "显示帮助信息")
+	mode      = flag.String("mode", "client", "运行模式: server 或 client")
+	host      = flag.String("host", "localhost", "服务器主机地址 (客户端模式)")
+	port      = flag.String("port", "5432", "服务器端口")
+	test      = flag.String("test", "bandwidth", "测试类型: bandwidth-upload, bandwidth-download, latency-ping, latency-jitter, packetloss, udp-bandwidth, udp-latency")
+	threads   = flag.Int("threads", 1, "并发线程数 (仅用于带宽测试)")
+	localIP   = flag.String("localip", "", "本地IP地址 (可选，用于指定源IP进行测试)")
+	duration  = flag.Int("duration", 10, "测试持续时间 (秒)")
+	bandwidth = flag.String("b", "", "目标带宽 (例如: 10M, 100K, 1G)，用于UDP带宽测试")
+	help      = flag.Bool("help", false, "显示帮助信息")
 )
 
 func main() {
@@ -35,7 +36,7 @@ func main() {
 			log.Fatalf("Server error: %v", err)
 		}
 	case "client":
-		err := cmd.Client(*host, *port, *test, *threads, *localIP, *duration)
+		err := cmd.Client(*host, *port, *test, *threads, *localIP, *duration, *bandwidth)
 		if err != nil {
 			log.Fatalf("Client error: %v", err)
 		}
@@ -70,5 +71,6 @@ func showHelp() {
 	fmt.Println("  -localip  本地IP地址 (可选，用于指定源IP进行测试)")
 	fmt.Println("  -duration 测试持续时间 (秒) (默认: 10)")
 	fmt.Println("  -threads  并发线程数 (用于带宽和UDP测试) (默认: 1)")
+	fmt.Println("  -b       目标带宽 (例如: 10M, 100K, 1G)，用于UDP带宽测试，类似iperf的-b参数")
 	fmt.Println("  -help     显示此帮助信息")
 }

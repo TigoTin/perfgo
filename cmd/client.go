@@ -58,7 +58,7 @@ func isLocalhost(addr string) bool {
 }
 
 // Client 启动客户端模式并执行指定测试
-func Client(host, port, testType string, threads int, localIP string, duration int) error {
+func Client(host, port, testType string, threads int, localIP string, duration int, targetBandwidth string) error {
 	serverAddr := host + ":" + port
 	fmt.Printf("Connecting to server at %s\n", serverAddr)
 
@@ -117,8 +117,8 @@ func Client(host, port, testType string, threads int, localIP string, duration i
 	case "packetloss":
 		return packetloss.ClientHandler(conn)
 	case "udp-bandwidth":
-		// 对于UDP测试，使用指定的持续时间
-		return udp.ClientHandler(serverAddr, "bandwidth", localIP, threads, duration)
+		// 对于UDP测试，使用指定的持续时间和目标带宽
+		return udp.ClientHandlerWithBandwidth(serverAddr, "bandwidth", localIP, threads, duration, targetBandwidth)
 	case "udp-latency":
 		// 对于UDP测试，使用指定的持续时间
 		return udp.ClientHandler(serverAddr, "latency", localIP, threads, duration)

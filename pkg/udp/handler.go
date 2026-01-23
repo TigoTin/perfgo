@@ -51,6 +51,11 @@ func (ut *UDPTester) ServerHandleUDPMessage(tcpConn net.Conn, msg *protocol.Mess
 
 // ClientHandler 客户端处理UDP测试请求（支持多线程和持续时间）
 func ClientHandler(serverAddr string, testType string, localIP string, threads int, duration int) error {
+	return ClientHandlerWithBandwidth(serverAddr, testType, localIP, threads, duration, "")
+}
+
+// ClientHandlerWithBandwidth 客户端处理UDP测试请求（支持多线程、持续时间和目标带宽）
+func ClientHandlerWithBandwidth(serverAddr string, testType string, localIP string, threads int, duration int, targetBandwidth string) error {
 	// 解析UDP服务器地址
 	udpAddr, err := net.ResolveUDPAddr("udp", serverAddr)
 	if err != nil {
@@ -84,6 +89,10 @@ func ClientHandler(serverAddr string, testType string, localIP string, threads i
 			"duration":  duration,
 		},
 	}
+	// 如果指定了目标带宽，则添加到负载中
+	if targetBandwidth != "" {
+		msg.Payload["bandwidth"] = targetBandwidth
+	}
 
 	err = msg.Send(conn)
 	if err != nil {
@@ -94,8 +103,11 @@ func ClientHandler(serverAddr string, testType string, localIP string, threads i
 	ut := NewUDPTester()
 	switch testType {
 	case "bandwidth":
-		return ut.UDPBandwidthTestWithDuration(conn, threads, duration)
+		return ut.UDPBandwidthTestWithBandwidth(conn, threads, duration, targetBandwidth)
 	case "latency":
+		if targetBandwidth != "" {
+			return ut.UDPLatencyTestWithBandwidth(conn, targetBandwidth)
+		}
 		return ut.UDPLatencyTestWithDuration(conn, threads, duration)
 	default:
 		return fmt.Errorf("unknown UDP test type: %s", testType)

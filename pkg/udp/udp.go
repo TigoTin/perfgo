@@ -3,6 +3,8 @@ package udp
 import (
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -246,6 +248,191 @@ func (ut *UDPTester) UDPLatencyTestWithDuration(conn *net.UDPConn, threads int, 
 
 // UDPLatencyTest 执行UDP延迟测试
 func (ut *UDPTester) UDPLatencyTest(conn *net.UDPConn) error {
+	return ut.UDPLatencyTestWithBandwidth(conn, "")
+}
+
+// UDPLatencyTestOriginal 原来的UDP延迟测试实现
+func (ut *UDPTester) UDPLatencyTestOriginal(conn *net.UDPConn) error {
+	return ut.UDPLatencyTestInternal(conn)
+}
+
+// UDPBandwidthTestWithBandwidth 执行UDP带宽测试（支持目标带宽限制）
+func (ut *UDPTester) UDPBandwidthTestWithBandwidth(conn *net.UDPConn, threads int, durationSeconds int, targetBandwidth string) error {
+	if targetBandwidth == "" {
+		// 如果没有指定目标带宽，则执行普通带宽测试
+		return ut.UDPBandwidthTestWithDuration(conn, threads, durationSeconds)
+	}
+
+	// 解析目标带宽
+	targetBps, err := parseBandwidth(targetBandwidth)
+	if err != nil {
+		return fmt.Errorf("invalid bandwidth format: %v", err)
+	}
+
+	fmt.Printf("开始UDP带宽测试，目标带宽: %s，线程数: %d，时长: %d秒...\n", targetBandwidth, threads, durationSeconds)
+
+	if threads <= 0 {
+		threads = 1
+	}
+	if durationSeconds <= 0 {
+		durationSeconds = 10
+	}
+
+	// 创建通道用于收集各线程的结果
+	results := make(chan error, threads)
+
+	// 计算结束时间
+	endTime := time.Now().Add(time.Duration(durationSeconds) * time.Second)
+
+	// 计算每秒需要发送的字节数
+	bytesPerSecond := int64(targetBps / 8)
+	// 计算每个线程每秒应该发送的字节数
+	bytesPerSecondPerThread := bytesPerSecond / int64(threads)
+	// 使用100ms的时间窗口来分配数据发送
+	windowSize := time.Millisecond * 100
+	bytesPerWindowPerThread := bytesPerSecondPerThread / 10 // 10个窗口 = 1秒
+
+	// 启动多个goroutine进行并发测试
+	for i := 0; i < threads; i++ {
+		go func(threadID int) {
+			startTime := time.Now()
+			sentPackets := 0
+			sentBytes := int64(0)
+
+			// 记录上次窗口时间
+			lastWindow := startTime
+
+			for time.Now().Before(endTime) {
+				currentTime := time.Now()
+				// 检查是否进入新的时间窗口
+				if currentTime.Sub(lastWindow) >= windowSize {
+					lastWindow = currentTime
+				}
+
+				// 计算当前窗口内还可以发送多少字节
+				windowStart := lastWindow
+				timeSinceWindowStart := time.Since(windowStart)
+				// 如果仍在当前窗口内，计算已用时间比例
+				if timeSinceWindowStart < windowSize {
+					// 按比例计算可用字节数
+					usedWindowRatio := float64(timeSinceWindowStart) / float64(windowSize)
+					usedBytesInWindow := int64(float64(bytesPerWindowPerThread) * usedWindowRatio)
+					availableBytes := bytesPerWindowPerThread - usedBytesInWindow
+
+					if availableBytes > 0 {
+						// 发送适当大小的数据包
+						packetSize := int(availableBytes)
+						// 限制单个数据包大小，避免过大
+						if packetSize > 1472 { // UDP MTU建议值
+							packetSize = 1472
+						} else if packetSize < 64 { // 最小合理数据包大小
+							packetSize = 64
+						}
+
+						data := make([]byte, packetSize)
+						for j := 0; j < packetSize; j++ {
+							data[j] = byte((threadID*1000 + sentPackets + j) % 256)
+						}
+
+						err := conn.SetWriteDeadline(time.Now().Add(time.Second * 5))
+						if err != nil {
+							results <- fmt.Errorf("thread %d: failed to set write deadline: %v", threadID, err)
+							return
+						}
+
+						n, err := conn.Write(data)
+						if err != nil {
+							results <- fmt.Errorf("thread %d: failed to send UDP packet: %v", threadID, err)
+							return
+						}
+
+						sentPackets++
+						sentBytes += int64(n)
+
+						// 短暂休眠以避免过度占用CPU
+						time.Sleep(time.Microsecond * 100)
+					} else {
+						// 当前窗口已满，等待下一个窗口
+						time.Sleep(windowSize - time.Since(lastWindow))
+					}
+				} else {
+					// 时间窗口已过，等待下一个
+					time.Sleep(windowSize)
+				}
+			}
+
+			elapsed := time.Since(startTime)
+			throughput := float64(sentBytes) / elapsed.Seconds()
+
+			fmt.Printf("  线程 %d 完成: 时长: %.2fs, 数据包数: %d, 实际速度: %.2f 字节/秒 (%.2f Mbps)\n",
+				threadID, elapsed.Seconds(), sentPackets, throughput, throughput*8/1024/1024)
+			results <- nil
+		}(i)
+	}
+
+	// 等待所有线程完成
+	for i := 0; i < threads; i++ {
+		err := <-results
+		if err != nil {
+			return err
+		}
+	}
+
+	fmt.Printf("UDP带宽测试完成，目标带宽: %s，线程数: %d，时长: %d秒\n", targetBandwidth, threads, durationSeconds)
+	return nil
+}
+
+// parseBandwidth 解析带宽字符串，返回比特每秒
+func parseBandwidth(bandwidth string) (int64, error) {
+	// 移除空格
+	bandwidth = strings.TrimSpace(bandwidth)
+
+	// 获取数值和单位
+	var numStr string
+	var unit string
+	for i, r := range bandwidth {
+		if r >= '0' && r <= '9' || r == '.' {
+			numStr += string(r)
+		} else {
+			unit = bandwidth[i:]
+			break
+		}
+	}
+
+	num, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid number in bandwidth: %v", err)
+	}
+
+	// 解析单位
+	switch strings.ToUpper(unit) {
+	case "B", "":
+		return int64(num), nil // bytes per second
+	case "K", "KB":
+		return int64(num * 1000), nil // kilobytes per second
+	case "M", "MB":
+		return int64(num * 1000 * 1000), nil // megabytes per second
+	case "G", "GB":
+		return int64(num * 1000 * 1000 * 1000), nil // gigabytes per second
+	case "KBIT", "Kb":
+		return int64(num * 1000 / 8), nil // kilobits per second
+	case "MBIT", "Mb":
+		return int64(num * 1000 * 1000 / 8), nil // megabits per second
+	case "GBIT", "Gb":
+		return int64(num * 1000 * 1000 * 1000 / 8), nil // gigabits per second
+	default:
+		return 0, fmt.Errorf("unknown bandwidth unit: %s", unit)
+	}
+}
+
+// UDPLatencyTestWithBandwidth 执行UDP延迟测试（支持带宽参数但忽略）
+func (ut *UDPTester) UDPLatencyTestWithBandwidth(conn *net.UDPConn, targetBandwidth string) error {
+	// 对于延迟测试，带宽参数被忽略
+	return ut.UDPLatencyTestInternal(conn)
+}
+
+// UDPLatencyTestInternal 执行UDP延迟测试的内部实现
+func (ut *UDPTester) UDPLatencyTestInternal(conn *net.UDPConn) error {
 	fmt.Println("开始UDP延迟测试...")
 
 	packetSize := 64 // 64字节的数据包

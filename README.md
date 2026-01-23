@@ -43,6 +43,9 @@ go run main.go -mode=client -host=localhost -port=5432 -test=packetloss
 # UDP带宽测试
 go run main.go -mode=client -host=localhost -port=5432 -test=udp-bandwidth
 
+# UDP带宽测试（指定目标带宽，类似iperf的-b参数）
+go run main.go -mode=client -host=localhost -port=5432 -test=udp-bandwidth -b 10M
+
 # UDP延迟测试
 go run main.go -mode=client -host=localhost -port=5432 -test=udp-latency
 ```
@@ -63,6 +66,7 @@ go run main.go -mode=client -host=localhost -port=5432 -test=udp-latency
 - `-threads` 并发线程数 (用于带宽和UDP测试) (默认: 1)
 - `-localip` 本地IP地址 (可选，用于指定源IP进行测试)
 - `-duration` 测试持续时间 (秒) (默认: 10)
+- `-b` 目标带宽 (例如: 10M, 100K, 1G)，用于UDP带宽测试，类似iperf的-b参数
 - `-help` 显示帮助信息
 
 ## 构建
