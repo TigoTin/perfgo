@@ -7,6 +7,7 @@ all: build
 # 构建应用
 .PHONY: build
 build:
+	@mkdir -p bin
 	go build -o bin/perfgo .
 
 # 运行应用

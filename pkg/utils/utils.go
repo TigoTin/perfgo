@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/cheynewallace/tabby"
 )
 
 // FormatBytes 将字节数格式化为人类可读的格式
@@ -46,6 +48,43 @@ func FormatSpeedDetailed(bytesPerSec float64) string {
 	basicFormat := FormatSpeed(bytesPerSec)
 	mbpsFormat := FormatSpeedMbps(bytesPerSec)
 	return fmt.Sprintf("%s (%s)", basicFormat, mbpsFormat)
+}
+
+// TestResult 测试结果结构
+type TestResult struct {
+	Protocol    string  `json:"protocol"`     // 协议类型 (TCP/UDP)
+	TestType    string  `json:"test_type"`    // 测试类型 (bandwidth/latency)
+	Direction   string  `json:"direction"`    // 方向 (uplink/downlink)
+	Throughput  float64 `json:"throughput"`   // 吞吐量 (bytes/s)
+	AvgRTT      float64 `json:"avg_rtt"`      // 平均往返时间 (ns)
+	AvgJitter   float64 `json:"avg_jitter"`   // 平均抖动 (ns)
+	SuccessRate float64 `json:"success_rate"` // 成功率
+	TotalBytes  int64   `json:"total_bytes"`  // 总字节数
+	Duration    float64 `json:"duration"`     // 持续时间 (秒)
+}
+
+// PrintStructuredResult 打印结构化测试结果
+func PrintStructuredResult(result TestResult) {
+	table := tabby.New()
+
+	// 如果同时有吞吐量和延迟数据，一起显示
+	if result.Throughput > 0 && result.AvgRTT > 0 {
+		throughputStr := FormatSpeedMbps(result.Throughput)
+		avgRTT := time.Duration(result.AvgRTT)
+		table.AddHeader("网速", "延迟")
+		table.AddLine(throughputStr, avgRTT)
+	} else if result.Throughput > 0 {
+		// 只有网速
+		throughputStr := FormatSpeedMbps(result.Throughput)
+		table.AddHeader("网速", "延迟")
+		table.AddLine(throughputStr, "0")
+	} else if result.AvgRTT > 0 {
+		// 只有延迟
+		avgRTT := time.Duration(result.AvgRTT)
+		table.AddHeader("网速", "延迟")
+		table.AddLine("0", avgRTT)
+	}
+	table.Print()
 }
 
 // ParseDuration 解析持续时间字符串

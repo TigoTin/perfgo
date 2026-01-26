@@ -1,92 +1,169 @@
 package main
 
 import (
-	"flag"
+	"context"
 	"fmt"
-	"log"
 	"os"
 
-	"perfgo/cmd"
-)
+	"github.com/urfave/cli/v2"
 
-// Version 版本信息，在构建时注入
-var Version = "v1.0.0"
-
-// BuildTime 构建时间，在构建时注入
-var BuildTime = ""
-
-// GitCommit Git提交信息，在构建时注入
-var GitCommit = ""
-
-var (
-	mode      = flag.String("mode", "client", "运行模式: server 或 client")
-	host      = flag.String("host", "localhost", "服务器主机地址 (客户端模式)")
-	port      = flag.String("port", "5432", "服务器端口")
-	test      = flag.String("test", "bandwidth", "测试类型: bandwidth-upload, bandwidth-download, latency-ping, latency-jitter, packetloss, udp-bandwidth, udp-latency")
-	threads   = flag.Int("threads", 1, "并发线程数 (仅用于带宽测试)")
-	localIP   = flag.String("localip", "", "本地IP地址 (可选，用于指定源IP进行测试)")
-	duration  = flag.Int("duration", 10, "测试持续时间 (秒)")
-	bandwidth = flag.String("b", "", "目标带宽 (例如: 10M, 100K, 1G)，用于UDP带宽测试")
-	help      = flag.Bool("help", false, "显示帮助信息")
+	"perfgo/internal/client"
+	"perfgo/internal/server"
 )
 
 func main() {
-	flag.Parse()
-
-	if *help {
-		showHelp()
-		return
+	app := &cli.App{
+		Name:    "perfgo",
+		Usage:   "网络性能测试工具",
+		Version: "1.0.0",
+		Commands: []*cli.Command{
+			{
+				Name:    "server",
+				Aliases: []string{"s"},
+				Usage:   "启动服务器模式",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "port",
+						Value:   "5432",
+						Usage:   "服务器端口",
+						Aliases: []string{"p"},
+					},
+					&cli.StringFlag{
+						Name:  "bind",
+						Value: "",
+						Usage: "绑定IP地址 (可选)",
+					},
+				},
+				Action: func(cCtx *cli.Context) error {
+					return serverAction(cCtx)
+				},
+			},
+			{
+				Name:    "tcp",
+				Aliases: []string{"t"},
+				Usage:   "执行TCP网络测试（带宽和延迟）",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "host",
+						Value:    "localhost",
+						Usage:    "服务器主机地址",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:    "port",
+						Value:   "5432",
+						Usage:   "服务器端口",
+						Aliases: []string{"p"},
+					},
+					&cli.IntFlag{
+						Name:  "threads",
+						Value: 1,
+						Usage: "并发线程数",
+					},
+					&cli.IntFlag{
+						Name:  "duration",
+						Value: 10,
+						Usage: "测试持续时间（秒）",
+					},
+					&cli.StringFlag{
+						Name:  "localip",
+						Value: "",
+						Usage: "本地IP地址 (可选，用于指定源IP进行测试)",
+					},
+				},
+				Action: func(cCtx *cli.Context) error {
+					return tcpTestAction(cCtx)
+				},
+			},
+			{
+				Name:    "udp",
+				Aliases: []string{"u"},
+				Usage:   "执行UDP网络测试（带宽和延迟）",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "host",
+						Value:    "localhost",
+						Usage:    "服务器主机地址",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:    "port",
+						Value:   "5432",
+						Usage:   "服务器端口",
+						Aliases: []string{"p"},
+					},
+					&cli.IntFlag{
+						Name:  "threads",
+						Value: 1,
+						Usage: "并发线程数",
+					},
+					&cli.IntFlag{
+						Name:  "duration",
+						Value: 10,
+						Usage: "测试持续时间（秒）",
+					},
+					&cli.StringFlag{
+						Name:    "bandwidth",
+						Value:   "",
+						Usage:   "目标带宽 (例如: 10M, 100K, 1G)，用于UDP带宽测试",
+						Aliases: []string{"b"},
+					},
+					&cli.StringFlag{
+						Name:  "localip",
+						Value: "",
+						Usage: "本地IP地址 (可选，用于指定源IP进行测试)",
+					},
+				},
+				Action: func(cCtx *cli.Context) error {
+					return udpTestAction(cCtx)
+				},
+			},
+		},
 	}
 
-	switch *mode {
-	case "server":
-		err := cmd.Server(*port, *localIP)
-		if err != nil {
-			log.Fatalf("Server error: %v", err)
-		}
-	case "client":
-		err := cmd.Client(*host, *port, *test, *threads, *localIP, *duration, *bandwidth)
-		if err != nil {
-			log.Fatalf("Client error: %v", err)
-		}
-	default:
-		fmt.Printf("Invalid mode: %s. Use 'server' or 'client'.\n", *mode)
-		showHelp()
+	if err := app.Run(os.Args); err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func showHelp() {
-	versionStr := Version
-	if BuildTime != "" {
-		versionStr += " (" + BuildTime + ")"
-	}
-	if GitCommit != "" {
-		versionStr += " [" + GitCommit + "]"
-	}
-	fmt.Printf("Perfgo - 网络质量测试工具 v%s\n", versionStr)
-	fmt.Println()
-	fmt.Println("用法:")
-	fmt.Println("  服务器模式: go run main.go -mode=server -port=5432 [-localip=0.0.0.0]")
-	fmt.Println("  客户端模式: go run main.go -mode=client -host=localhost -port=5432 -test=bandwidth-upload [-localip=192.168.1.100]")
-	fmt.Println("  参数说明:")
-	fmt.Println("    -localip: 指定本地IP地址，用于多网卡环境下的源地址绑定")
-	fmt.Println()
-	fmt.Println("参数说明:")
-	fmt.Println("  -mode     运行模式: server 或 client (默认: client)")
-	fmt.Println("  -host     服务器主机地址 (客户端模式) (默认: localhost)")
-	fmt.Println("  -port     服务器端口 (默认: 5432)")
-	fmt.Println("  -test     测试类型:")
-	fmt.Println("            bandwidth-upload      上传速度测试")
-	fmt.Println("            bandwidth-download    下载速度测试")
-	fmt.Println("            latency-ping          延迟测试")
-	fmt.Println("            latency-jitter        抖动测试")
-	fmt.Println("            packetloss            丢包率测试")
-	fmt.Println("            udp-bandwidth         UDP带宽测试")
-	fmt.Println("            udp-latency           UDP延迟测试")
-	fmt.Println("  -localip  本地IP地址 (可选，用于指定源IP进行测试)")
-	fmt.Println("  -duration 测试持续时间 (秒) (默认: 10)")
-	fmt.Println("  -threads  并发线程数 (用于带宽和UDP测试) (默认: 1)")
-	fmt.Println("  -b       目标带宽 (例如: 10M, 100K, 1G)，用于UDP带宽测试，类似iperf的-b参数")
-	fmt.Println("  -help     显示此帮助信息")
+func serverAction(cCtx *cli.Context) error {
+	port := cCtx.String("port")
+	bindIP := cCtx.String("bind")
+
+	fmt.Printf("启动服务器模式，端口: %s\n", port)
+
+	// 创建服务器上下文
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server := server.NewServer(port, bindIP)
+	return server.Start(ctx)
+}
+
+func tcpTestAction(cCtx *cli.Context) error {
+	host := cCtx.String("host")
+	port := cCtx.String("port")
+	threads := cCtx.Int("threads")
+	duration := cCtx.Int("duration")
+	localIP := cCtx.String("localip")
+
+	serverAddr := fmt.Sprintf("%s:%s", host, port)
+	tester := client.NewTCPTester()
+
+	return tester.RunTCPTest(serverAddr, threads, duration, localIP)
+}
+
+func udpTestAction(cCtx *cli.Context) error {
+	host := cCtx.String("host")
+	port := cCtx.String("port")
+	threads := cCtx.Int("threads")
+	duration := cCtx.Int("duration")
+	bandwidth := cCtx.String("bandwidth")
+	localIP := cCtx.String("localip")
+
+	serverAddr := fmt.Sprintf("%s:%s", host, port)
+	tester := client.NewUDPTester()
+
+	return tester.RunUDPTest(serverAddr, threads, duration, bandwidth, localIP)
 }
