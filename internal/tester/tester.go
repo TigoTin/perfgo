@@ -1,7 +1,6 @@
 package tester
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"sync"
@@ -41,14 +40,35 @@ func (nt *NetworkTester) HandleTCPTest(conn net.Conn, threads int, duration int)
 	nt.Duration = time.Duration(duration) * time.Second
 
 	// 分别执行带宽测试和延迟测试
-	err := nt.tcpBandwidthTest(conn, threads)
+	bwResult, err := nt.tcpBandwidthTest(conn, threads)
 	if err != nil {
 		fmt.Printf("TCP带宽测试失败: %v\n", err)
 	}
 
-	err = nt.tcpLatencyTest(conn)
+	latResult, err := nt.tcpLatencyTest(conn)
 	if err != nil {
 		fmt.Printf("TCP延迟测试失败: %v\n", err)
+	}
+
+	// 合并输出结果
+	if bwResult != nil && latResult != nil {
+		combinedResult := utils.TestResult{
+			Protocol:   "TCP",
+			TestType:   "combined",
+			Direction:  "uplink",
+			Throughput: bwResult.Throughput,
+			AvgRTT:     latResult.AvgRTT,
+			AvgJitter:  latResult.AvgJitter,
+			Duration:   bwResult.Duration,
+		}
+		utils.PrintStructuredResult(combinedResult)
+	} else {
+		if bwResult != nil {
+			utils.PrintStructuredResult(*bwResult)
+		}
+		if latResult != nil {
+			utils.PrintStructuredResult(*latResult)
+		}
 	}
 
 	return nil
@@ -60,79 +80,70 @@ func (nt *NetworkTester) HandleUDPTest(conn net.Conn, threads int, duration int,
 	nt.Duration = time.Duration(duration) * time.Second
 
 	// 分别执行带宽测试和延迟测试
-	err := nt.udpBandwidthTest(conn, threads, targetBandwidth)
+	bwResult, err := nt.udpBandwidthTest(conn, threads, targetBandwidth)
 	if err != nil {
 		fmt.Printf("UDP带宽测试失败: %v\n", err)
 	}
 
-	err = nt.udpLatencyTest(conn)
+	latResult, err := nt.udpLatencyTest(conn)
 	if err != nil {
 		fmt.Printf("UDP延迟测试失败: %v\n", err)
+	}
+
+	// 输出结果
+	if bwResult != nil {
+		utils.PrintStructuredResult(*bwResult)
+	}
+	if latResult != nil {
+		utils.PrintStructuredResult(*latResult)
 	}
 
 	return nil
 }
 
 // tcpBandwidthTest 执行TCP带宽测试
-// tcpBandwidthTestResult 存储TCP带宽测试结果
-var tcpBandwidthTestResult utils.TestResult
-var tcpBandwidthTestResultMutex sync.Mutex
-
-func (nt *NetworkTester) tcpBandwidthTest(conn net.Conn, threads int) error {
+func (nt *NetworkTester) tcpBandwidthTest(conn net.Conn, threads int) (*utils.TestResult, error) {
 	startTime := time.Now()
 	endTime := startTime.Add(nt.Duration)
 
 	var totalBytes int64
-	var mu sync.Mutex
 
 	// 使用更大的缓冲区提高效率
-	buf := make([]byte, 64*1024) // 64KB
+	buf := make([]byte, nt.BufferSize)
+
+	// 设置总的读取超时时间，避免在循环中重复设置系统调用，这是提高压测准确性的关键
+	conn.SetReadDeadline(endTime)
 
 	// 在指定时间内接收客户端发送的数据
 	for {
-		if time.Now().After(endTime) {
-			break
-		}
-		conn.SetReadDeadline(time.Now().Add(nt.Timeout))
 		n, err := conn.Read(buf)
+		if n > 0 {
+			totalBytes += int64(n)
+		}
 		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				// 超时，继续等待
-				continue
-			}
-			// 其他错误，退出
+			// 如果是超时（达到endTime）或连接关闭，则退出循环
 			break
 		}
-		// 累加接收到的字节数
-		mu.Lock()
-		totalBytes += int64(n)
-		mu.Unlock()
 	}
 
 	elapsed := time.Since(startTime)
+	if elapsed.Seconds() == 0 {
+		elapsed = time.Microsecond // 避免除以0
+	}
 	throughput := float64(totalBytes) / elapsed.Seconds()
 
-	// 存储带宽测试结果
-	tcpBandwidthTestResultMutex.Lock()
-	tcpBandwidthTestResult = utils.TestResult{
+	return &utils.TestResult{
 		Protocol:   "TCP",
 		TestType:   "bandwidth",
 		Direction:  "uplink",
 		Throughput: throughput,
 		TotalBytes: totalBytes,
 		Duration:   elapsed.Seconds(),
-	}
-	tcpBandwidthTestResultMutex.Unlock()
-
-	return nil
+	}, nil
 }
 
-// tcpLatencyTestResult 存储TCP延迟测试结果
-var tcpLatencyTestResult utils.TestResult
-var tcpLatencyTestResultMutex sync.Mutex
-
 // tcpLatencyTest 执行TCP延迟测试
-func (nt *NetworkTester) tcpLatencyTest(conn net.Conn) error {
+func (nt *NetworkTester) tcpLatencyTest(conn net.Conn) (*utils.TestResult, error) {
 	startTime := time.Now()
 
 	packetSize := 64 // 64字节的数据包
@@ -184,11 +195,12 @@ func (nt *NetworkTester) tcpLatencyTest(conn net.Conn) error {
 
 	if successfulPackets > 0 {
 		avgRTT := totalRTT / time.Duration(successfulPackets)
-		avgJitter := jitter / time.Duration(successfulPackets-1)
+		var avgJitter time.Duration
+		if successfulPackets > 1 {
+			avgJitter = jitter / time.Duration(successfulPackets-1)
+		}
 
-		// 存储延迟测试结果
-		tcpLatencyTestResultMutex.Lock()
-		tcpLatencyTestResult = utils.TestResult{
+		return &utils.TestResult{
 			Protocol:    "TCP",
 			TestType:    "latency",
 			Direction:   "round-trip",
@@ -196,52 +208,24 @@ func (nt *NetworkTester) tcpLatencyTest(conn net.Conn) error {
 			AvgJitter:   float64(avgJitter),
 			SuccessRate: float64(successfulPackets) / float64(numPackets),
 			Duration:    time.Since(startTime).Seconds(),
-		}
-		tcpLatencyTestResultMutex.Unlock()
+		}, nil
 	}
 
-	// 如果两个结果都有，则合并输出
-	tcpBandwidthTestResultMutex.Lock()
-	tcpLatencyTestResultMutex.Lock()
-	if tcpBandwidthTestResult.Throughput > 0 && tcpLatencyTestResult.AvgRTT > 0 {
-		// 合并结果并输出
-		combinedResult := utils.TestResult{
-			Protocol:   "TCP",
-			TestType:   "combined",
-			Direction:  "uplink",
-			Throughput: tcpBandwidthTestResult.Throughput,
-			AvgRTT:     tcpLatencyTestResult.AvgRTT,
-			AvgJitter:  tcpLatencyTestResult.AvgJitter,
-			Duration:   tcpBandwidthTestResult.Duration,
-		}
-		utils.PrintStructuredResult(combinedResult)
-	} else {
-		// 分别输出可用的结果
-		if tcpBandwidthTestResult.Throughput > 0 {
-			utils.PrintStructuredResult(tcpBandwidthTestResult)
-		}
-		if tcpLatencyTestResult.AvgRTT > 0 {
-			utils.PrintStructuredResult(tcpLatencyTestResult)
-		}
-	}
-	tcpLatencyTestResultMutex.Unlock()
-	tcpBandwidthTestResultMutex.Unlock()
-
-	return nil
+	return nil, fmt.Errorf("no packets received")
 }
 
 // udpBandwidthTest 执行UDP带宽测试
-func (nt *NetworkTester) udpBandwidthTest(conn net.Conn, threads int, targetBandwidth string) error {
+func (nt *NetworkTester) udpBandwidthTest(conn net.Conn, threads int, targetBandwidth string) (*utils.TestResult, error) {
 	// 对于TCP连接上的UDP测试模拟，我们暂时跳过
 	fmt.Printf("UDP带宽测试（通过TCP连接）: 目标带宽 %s\n", targetBandwidth)
-	return nil
+	return nil, nil
 }
 
 // udpLatencyTest 执行UDP延迟测试
-func (nt *NetworkTester) udpLatencyTest(conn net.Conn) error {
+func (nt *NetworkTester) udpLatencyTest(conn net.Conn) (*utils.TestResult, error) {
 	// 对于TCP连接上的UDP测试模拟，我们暂时跳过
 	fmt.Println("UDP延迟测试（通过TCP连接）")
-	return nil
+	return nil, nil
 }
 
 // HandleUDPTestUDP 处理UDP测试（通过UDP连接）
@@ -250,25 +234,42 @@ func (nt *NetworkTester) HandleUDPTestUDP(udpConn *net.UDPConn, clientAddr *net.
 	nt.Duration = time.Duration(duration) * time.Second
 
 	// 分别执行带宽测试和延迟测试
-	err := nt.udpBandwidthTestUDP(udpConn, clientAddr, threads, targetBandwidth)
+	bwResult, err := nt.udpBandwidthTestUDP(udpConn, clientAddr, threads, targetBandwidth)
 	if err != nil {
 		return err
 	}
 
-	err = nt.udpLatencyTestUDP(udpConn, clientAddr)
+	latResult, err := nt.udpLatencyTestUDP(udpConn, clientAddr)
 	if err != nil {
 		return err
+	}
+
+	// 输出结果
+	if bwResult != nil && latResult != nil {
+		combinedResult := utils.TestResult{
+			Protocol:   "UDP",
+			TestType:   "combined",
+			Direction:  "uplink",
+			Throughput: bwResult.Throughput,
+			AvgRTT:     latResult.AvgRTT,
+			AvgJitter:  latResult.AvgJitter,
+			Duration:   bwResult.Duration,
+		}
+		utils.PrintStructuredResult(combinedResult)
+	} else {
+		if bwResult != nil {
+			utils.PrintStructuredResult(*bwResult)
+		}
+		if latResult != nil {
+			utils.PrintStructuredResult(*latResult)
+		}
 	}
 
 	return nil
 }
 
-// udpBandwidthTestResult 存储UDP带宽测试结果
-var udpBandwidthTestResult utils.TestResult
-var udpBandwidthTestResultMutex sync.Mutex
-
 // udpBandwidthTestUDP 执行UDP带宽测试（通过UDP连接）
-func (nt *NetworkTester) udpBandwidthTestUDP(udpConn *net.UDPConn, clientAddr *net.UDPAddr, threads int, targetBandwidth string) error {
+func (nt *NetworkTester) udpBandwidthTestUDP(udpConn *net.UDPConn, clientAddr *net.UDPAddr, threads int, targetBandwidth string) (*utils.TestResult, error) {
 	startTime := time.Now()
 	endTime := startTime.Add(nt.Duration)
 
@@ -290,32 +291,25 @@ func (nt *NetworkTester) udpBandwidthTestUDP(udpConn *net.UDPConn, clientAddr *n
 			defer wg.Done()
 
 			threadBytes := int64(0)
-			ctx, cancel := context.WithTimeout(context.Background(), nt.Duration)
-			defer cancel()
+
+			// 使用 SetWriteDeadline 来控制时间，避免在循环中重复检查 time.Now()
+			// 注意：UDP连接也可以设置 WriteDeadline
+			udpConn.SetWriteDeadline(endTime)
 
 			for {
-				select {
-				case <-ctx.Done():
-					goto finish
-				default:
-					_, err := udpConn.WriteToUDP(data, clientAddr)
-					if err != nil {
-						goto finish
-					}
+				_, err := udpConn.WriteToUDP(data, clientAddr)
+				if err != nil {
+					break
+				}
 
-					threadBytes += int64(len(data))
+				threadBytes += int64(len(data))
 
-					// 检查是否已达到结束时间
-					if time.Now().After(endTime) {
-						goto finish
-					}
-
-					// 短暂延迟以避免过度占用网络
+				// 如果指定了目标带宽，则保持 sleep；否则尽可能快地发送
+				if targetBandwidth != "" {
 					time.Sleep(time.Millisecond * 10)
 				}
 			}
 
-		finish:
 			mu.Lock()
 			totalBytes += threadBytes
 			mu.Unlock()
@@ -326,29 +320,23 @@ func (nt *NetworkTester) udpBandwidthTestUDP(udpConn *net.UDPConn, clientAddr *n
 	wg.Wait()
 
 	elapsed := time.Since(startTime)
+	if elapsed.Seconds() == 0 {
+		elapsed = time.Microsecond
+	}
 	throughput := float64(totalBytes) / elapsed.Seconds()
 
-	// 存储带宽测试结果
-	udpBandwidthTestResultMutex.Lock()
-	udpBandwidthTestResult = utils.TestResult{
+	return &utils.TestResult{
 		Protocol:   "UDP",
 		TestType:   "bandwidth",
 		Direction:  "uplink",
 		Throughput: throughput,
 		TotalBytes: totalBytes,
 		Duration:   elapsed.Seconds(),
-	}
-	udpBandwidthTestResultMutex.Unlock()
-
-	return nil
+	}, nil
 }
 
-// udpLatencyTestResult 存储UDP延迟测试结果
-var udpLatencyTestResult utils.TestResult
-var udpLatencyTestResultMutex sync.Mutex
-
 // udpLatencyTestUDP 执行UDP延迟测试（通过UDP连接）
-func (nt *NetworkTester) udpLatencyTestUDP(udpConn *net.UDPConn, clientAddr *net.UDPAddr) error {
+func (nt *NetworkTester) udpLatencyTestUDP(udpConn *net.UDPConn, clientAddr *net.UDPAddr) (*utils.TestResult, error) {
 	startTime := time.Now()
 
 	packetSize := 64 // 64字节的数据包
@@ -407,11 +395,12 @@ func (nt *NetworkTester) udpLatencyTestUDP(udpConn *net.UDPConn, clientAddr *net
 
 	if successfulPackets > 0 {
 		avgRTT := totalRTT / time.Duration(successfulPackets)
-		avgJitter := jitter / time.Duration(successfulPackets-1)
+		var avgJitter time.Duration
+		if successfulPackets > 1 {
+			avgJitter = jitter / time.Duration(successfulPackets-1)
+		}
 
-		// 存储延迟测试结果
-		udpLatencyTestResultMutex.Lock()
-		udpLatencyTestResult = utils.TestResult{
+		return &utils.TestResult{
 			Protocol:    "UDP",
 			TestType:    "latency",
 			Direction:   "round-trip",
@@ -419,36 +408,8 @@ func (nt *NetworkTester) udpLatencyTestUDP(udpConn *net.UDPConn, clientAddr *net
 			AvgJitter:   float64(avgJitter),
 			SuccessRate: float64(successfulPackets) / float64(numPackets),
 			Duration:    time.Since(startTime).Seconds(),
-		}
-		udpLatencyTestResultMutex.Unlock()
+		}, nil
 	}
 
-	// 如果两个结果都有，则合并输出
-	udpBandwidthTestResultMutex.Lock()
-	udpLatencyTestResultMutex.Lock()
-	if udpBandwidthTestResult.Throughput > 0 && udpLatencyTestResult.AvgRTT > 0 {
-		// 合并结果并输出
-		combinedResult := utils.TestResult{
-			Protocol:   "UDP",
-			TestType:   "combined",
-			Direction:  "uplink",
-			Throughput: udpBandwidthTestResult.Throughput,
-			AvgRTT:     udpLatencyTestResult.AvgRTT,
-			AvgJitter:  udpLatencyTestResult.AvgJitter,
-			Duration:   udpBandwidthTestResult.Duration,
-		}
-		utils.PrintStructuredResult(combinedResult)
-	} else {
-		// 分别输出可用的结果
-		if udpBandwidthTestResult.Throughput > 0 {
-			utils.PrintStructuredResult(udpBandwidthTestResult)
-		}
-		if udpLatencyTestResult.AvgRTT > 0 {
-			utils.PrintStructuredResult(udpLatencyTestResult)
-		}
-	}
-	udpLatencyTestResultMutex.Unlock()
-	udpBandwidthTestResultMutex.Unlock()
-
-	return nil
+	return nil, fmt.Errorf("no UDP packets received")
 }

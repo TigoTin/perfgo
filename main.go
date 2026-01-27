@@ -56,9 +56,10 @@ func main() {
 						Aliases: []string{"p"},
 					},
 					&cli.IntFlag{
-						Name:  "threads",
-						Value: 1,
-						Usage: "并发线程数",
+						Name:    "connections",
+						Value:   1,
+						Usage:   "并发连接数（每个连接独立测试）",
+						Aliases: []string{"c", "threads"},
 					},
 					&cli.IntFlag{
 						Name:  "duration",
@@ -93,9 +94,10 @@ func main() {
 						Aliases: []string{"p"},
 					},
 					&cli.IntFlag{
-						Name:  "threads",
-						Value: 1,
-						Usage: "并发线程数",
+						Name:    "connections",
+						Value:   1,
+						Usage:   "并发连接数",
+						Aliases: []string{"c", "threads"},
 					},
 					&cli.IntFlag{
 						Name:  "duration",
@@ -144,20 +146,20 @@ func serverAction(cCtx *cli.Context) error {
 func tcpTestAction(cCtx *cli.Context) error {
 	host := cCtx.String("host")
 	port := cCtx.String("port")
-	threads := cCtx.Int("threads")
+	connections := cCtx.Int("connections")
 	duration := cCtx.Int("duration")
 	localIP := cCtx.String("localip")
 
 	serverAddr := fmt.Sprintf("%s:%s", host, port)
 	tester := client.NewTCPTester()
 
-	return tester.RunTCPTest(serverAddr, threads, duration, localIP)
+	return tester.RunTCPTest(serverAddr, connections, duration, localIP)
 }
 
 func udpTestAction(cCtx *cli.Context) error {
 	host := cCtx.String("host")
 	port := cCtx.String("port")
-	threads := cCtx.Int("threads")
+	connections := cCtx.Int("connections")
 	duration := cCtx.Int("duration")
 	bandwidth := cCtx.String("bandwidth")
 	localIP := cCtx.String("localip")
@@ -165,5 +167,5 @@ func udpTestAction(cCtx *cli.Context) error {
 	serverAddr := fmt.Sprintf("%s:%s", host, port)
 	tester := client.NewUDPTester()
 
-	return tester.RunUDPTest(serverAddr, threads, duration, bandwidth, localIP)
+	return tester.RunUDPTest(serverAddr, connections, duration, bandwidth, localIP)
 }
