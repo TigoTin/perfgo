@@ -9,6 +9,7 @@ import (
 
 	"perfgo/internal/client"
 	"perfgo/internal/server"
+	"perfgo/pkg/utils"
 )
 
 func main() {

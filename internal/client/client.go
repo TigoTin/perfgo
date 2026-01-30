@@ -273,6 +273,7 @@ func (ct *TCPTester) runSingleConnectionLatencyTest(conn net.Conn) (*utils.TestR
 	startTime := time.Now()
 	for i := 0; i < numPackets; i++ {
 		sendTime := time.Now()
+		// 发送数据包
 		_, err := conn.Write(data)
 		if err != nil {
 			continue
@@ -281,10 +282,17 @@ func (ct *TCPTester) runSingleConnectionLatencyTest(conn net.Conn) (*utils.TestR
 		// 设置读取超时
 		conn.SetReadDeadline(time.Now().Add(ct.Timeout))
 
-		// 尝试读取响应
+		// 尝试读取响应 - 使用临时缓冲区接收数据
 		buf := make([]byte, 1024)
-		_, err = conn.Read(buf)
+		n, err := conn.Read(buf)
 		if err != nil {
+			continue
+		}
+
+		// 检查接收到的数据是否是我们发送的数据回显
+		// 在测试场景下，服务器应该回显我们发送的数据
+		if n < len(data) || string(buf[:len(data)]) != string(data) {
+			// 如果数据不匹配，继续尝试读取下一个响应
 			continue
 		}
 

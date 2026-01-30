@@ -162,17 +162,21 @@ func (nt *NetworkTester) tcpLatencyTest(conn net.Conn) (*utils.TestResult, error
 
 	for i := 0; i < numPackets; i++ {
 		sendTime := time.Now()
-		_, err := conn.Write(data)
+		// 尝试读取客户端发送的数据包
+		conn.SetReadDeadline(time.Now().Add(nt.Timeout))
+		buf := make([]byte, 1024)
+		n, err := conn.Read(buf)
 		if err != nil {
 			continue
 		}
 
-		// 设置读取超时
-		conn.SetReadDeadline(time.Now().Add(nt.Timeout))
+		// 检查是否收到了预期大小的数据
+		if n < packetSize {
+			continue
+		}
 
-		// 尝试读取响应
-		buf := make([]byte, 1024)
-		_, err = conn.Read(buf)
+		// 回显接收到的数据
+		_, err = conn.Write(buf[:n])
 		if err != nil {
 			continue
 		}
