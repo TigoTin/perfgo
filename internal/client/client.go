@@ -3,6 +3,7 @@ package client
 import (
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -97,16 +98,53 @@ func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int
 				return
 			}
 
-			// 执行带宽测试（单连接单线程）
-			bwResult, err := ct.runSingleConnectionBandwidthTest(conn, duration)
-			if err != nil {
-				fmt.Printf("连接%d: TCP带宽测试失败: %v\n", connID, err)
+			// 创建通道用于接收测试结果
+			bwResultChan := make(chan *utils.TestResult, 1)
+			latResultChan := make(chan *utils.TestResult, 1)
+			errChan := make(chan error, 2)
+
+			// 提取目标地址用于ping测试
+			targetHost := serverAddr
+			colonIndex := strings.LastIndex(serverAddr, ":")
+			if colonIndex != -1 {
+				targetHost = serverAddr[:colonIndex]
 			}
 
-			// 执行延迟测试
-			latResult, err := ct.runSingleConnectionLatencyTest(conn)
-			if err != nil {
-				fmt.Printf("连接%d: TCP延迟测试失败: %v\n", connID, err)
+			// 并行执行带宽测试和延迟测试
+			go func() {
+				bwResult, err := ct.runSingleConnectionBandwidthTest(conn, duration)
+				if err != nil {
+					errChan <- fmt.Errorf("连接%d: TCP带宽测试失败: %v", connID, err)
+					bwResultChan <- nil
+				} else {
+					bwResultChan <- bwResult
+				}
+			}()
+
+			go func() {
+				latResult, err := ct.runSingleConnectionLatencyTest(targetHost)
+				if err != nil {
+					errChan <- fmt.Errorf("连接%d: TCP延迟测试失败: %v", connID, err)
+					latResultChan <- nil
+				} else {
+					latResultChan <- latResult
+				}
+			}()
+
+			// 等待测试结果
+			var bwResult *utils.TestResult
+			var latResult *utils.TestResult
+
+			// 等待两个测试完成
+			for i := 0; i < 2; i++ {
+				select {
+				case bwRes := <-bwResultChan:
+					bwResult = bwRes
+				case latRes := <-latResultChan:
+					latResult = latRes
+				case err := <-errChan:
+					fmt.Printf("%v\n", err)
+				}
 			}
 
 			resultChan <- connResult{
@@ -185,31 +223,6 @@ func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int
 	return nil
 }
 
-// printCombinedResults 统一输出带宽和延迟测试结果
-func (ct *TCPTester) printCombinedResults() {
-	// 如果两个结果都有，则合并输出
-	if ct.bandwidthResult != nil && ct.latencyResult != nil {
-		combinedResult := utils.TestResult{
-			Protocol:   ct.bandwidthResult.Protocol,
-			TestType:   "combined",
-			Direction:  ct.bandwidthResult.Direction,
-			Throughput: ct.bandwidthResult.Throughput,
-			AvgRTT:     ct.latencyResult.AvgRTT,
-			AvgJitter:  ct.latencyResult.AvgJitter,
-			Duration:   ct.bandwidthResult.Duration,
-		}
-		utils.PrintStructuredResult(combinedResult)
-	} else {
-		// 分别输出可用的结果
-		if ct.bandwidthResult != nil {
-			utils.PrintStructuredResult(*ct.bandwidthResult)
-		}
-		if ct.latencyResult != nil {
-			utils.PrintStructuredResult(*ct.latencyResult)
-		}
-	}
-}
-
 // runSingleConnectionBandwidthTest 执行TCP带宽测试（单连接单线程）
 func (ct *TCPTester) runSingleConnectionBandwidthTest(conn net.Conn, duration int) (*utils.TestResult, error) {
 	startTime := time.Now()
@@ -254,87 +267,31 @@ func (ct *TCPTester) runSingleConnectionBandwidthTest(conn net.Conn, duration in
 	}, nil
 }
 
-// runSingleConnectionLatencyTest 执行TCP延迟测试（单连接）
-func (ct *TCPTester) runSingleConnectionLatencyTest(conn net.Conn) (*utils.TestResult, error) {
-	packetSize := 64 // 64字节的数据包
-	numPackets := 10 // 发送10个包来测试延迟
-
-	data := make([]byte, packetSize)
-	for i := 0; i < packetSize; i++ {
-		data[i] = byte(i % 256)
+// runSingleConnectionLatencyTest 执行基于ping的延迟测试（单连接）
+func (ct *TCPTester) runSingleConnectionLatencyTest(target string) (*utils.TestResult, error) {
+	// 使用ping进行延迟测试
+	pingResult, err := utils.PingTarget(target, 10) // 发送10个ping包
+	if err != nil {
+		return nil, fmt.Errorf("ping测试失败: %v", err)
 	}
 
-	totalRTT := time.Duration(0)
-	successfulPackets := 0
-	jitter := time.Duration(0)
-
-	var lastRTT time.Duration
-
-	startTime := time.Now()
-	for i := 0; i < numPackets; i++ {
-		sendTime := time.Now()
-		// 发送数据包
-		_, err := conn.Write(data)
-		if err != nil {
-			continue
-		}
-
-		// 设置读取超时
-		conn.SetReadDeadline(time.Now().Add(ct.Timeout))
-
-		// 尝试读取响应 - 使用临时缓冲区接收数据
-		buf := make([]byte, 1024)
-		n, err := conn.Read(buf)
-		if err != nil {
-			continue
-		}
-
-		// 检查接收到的数据是否是我们发送的数据回显
-		// 在测试场景下，服务器应该回显我们发送的数据
-		if n < len(data) || string(buf[:len(data)]) != string(data) {
-			// 如果数据不匹配，继续尝试读取下一个响应
-			continue
-		}
-
-		receiveTime := time.Now()
-		rtt := receiveTime.Sub(sendTime)
-		totalRTT += rtt
-		successfulPackets++
-
-		// 计算抖动（RTT变化）
-		if lastRTT != 0 {
-			diff := rtt - lastRTT
-			if diff < 0 {
-				diff = -diff
-			}
-			jitter += diff
-		}
-		lastRTT = rtt
+	if !pingResult.Success {
+		return nil, fmt.Errorf("ping测试无响应")
 	}
 
-	if successfulPackets > 0 {
-		avgRTT := totalRTT / time.Duration(successfulPackets)
-		var avgJitter time.Duration
-		if successfulPackets > 1 {
-			avgJitter = jitter / time.Duration(successfulPackets-1)
-		}
-
-		return &utils.TestResult{
-			Protocol:    "TCP",
-			TestType:    "latency",
-			Direction:   "round-trip",
-			AvgRTT:      float64(avgRTT),
-			AvgJitter:   float64(avgJitter),
-			SuccessRate: float64(successfulPackets) / float64(numPackets),
-			Duration:    time.Since(startTime).Seconds(),
-		}, nil
-	}
-
-	return nil, fmt.Errorf("no packets received")
+	return &utils.TestResult{
+		Protocol:    "PING",
+		TestType:    "latency",
+		Direction:   "round-trip",
+		AvgRTT:      pingResult.Latency, // 毫秒值
+		AvgJitter:   pingResult.Jitter,  // 毫秒值
+		SuccessRate: (100 - pingResult.PacketLoss) / 100,
+		Duration:    pingResult.Latency * 10, // 估算值
+	}, nil
 }
 
 // runTCPBandwidthTest 执行TCP带宽测试（旧方法，保留以兼容）
-func (ct *TCPTester) runTCPBandwidthTest(conn net.Conn, threads int, duration int) error {
+func (ct *TCPTester) runTCPBandwidthTest(conn net.Conn, threads int, duration int, serverAddr string) error {
 	startTime := time.Now()
 	endTime := startTime.Add(time.Duration(duration) * time.Second)
 
@@ -398,79 +355,45 @@ func (ct *TCPTester) runTCPBandwidthTest(conn net.Conn, threads int, duration in
 	}
 	ct.bandwidthResult = &result
 
+	// 执行延迟测试
+	err := ct.runTCPLatencyTest(serverAddr)
+	if err != nil {
+		fmt.Printf("TCP延迟测试失败: %v\n", err)
+	}
+
 	return nil
 }
 
-// runTCPLatencyTest 执行TCP延迟测试
-func (ct *TCPTester) runTCPLatencyTest(conn net.Conn) error {
-
-	packetSize := 64 // 64字节的数据包
-	numPackets := 10 // 发送10个包来测试延迟
-
-	data := make([]byte, packetSize)
-	for i := 0; i < packetSize; i++ {
-		data[i] = byte(i % 256)
+// runTCPLatencyTest 执行基于ping的延迟测试
+func (ct *TCPTester) runTCPLatencyTest(serverAddr string) error {
+	// 提取目标主机用于ping测试
+	targetHost := serverAddr
+	colonIndex := strings.LastIndex(serverAddr, ":")
+	if colonIndex != -1 {
+		targetHost = serverAddr[:colonIndex]
 	}
 
-	totalRTT := time.Duration(0)
-	successfulPackets := 0
-	jitter := time.Duration(0)
-
-	var lastRTT time.Duration
-
-	startTime := time.Now()
-	for i := 0; i < numPackets; i++ {
-		sendTime := time.Now()
-		_, err := conn.Write(data)
-		if err != nil {
-			continue
-		}
-
-		// 设置读取超时
-		conn.SetReadDeadline(time.Now().Add(ct.Timeout))
-
-		// 尝试读取响应
-		buf := make([]byte, 1024)
-		_, err = conn.Read(buf)
-		if err != nil {
-			continue
-		}
-
-		receiveTime := time.Now()
-		rtt := receiveTime.Sub(sendTime)
-		totalRTT += rtt
-		successfulPackets++
-
-		// 计算抖动（RTT变化）
-		if lastRTT != 0 {
-			diff := rtt - lastRTT
-			if diff < 0 {
-				diff = -diff
-			}
-			jitter += diff
-		}
-		lastRTT = rtt
+	// 使用ping进行延迟测试
+	pingResult, err := utils.PingTarget(targetHost, 10) // 发送10个ping包
+	if err != nil {
+		return fmt.Errorf("ping测试失败: %v", err)
 	}
 
-	if successfulPackets > 0 {
-		avgRTT := totalRTT / time.Duration(successfulPackets)
-		var avgJitter time.Duration
-		if successfulPackets > 1 {
-			avgJitter = jitter / time.Duration(successfulPackets-1)
-		}
-
-		// 创建测试结果并保存
-		result := utils.TestResult{
-			Protocol:    "TCP",
-			TestType:    "latency",
-			Direction:   "round-trip",
-			AvgRTT:      float64(avgRTT),
-			AvgJitter:   float64(avgJitter),
-			SuccessRate: float64(successfulPackets) / float64(numPackets),
-			Duration:    time.Since(startTime).Seconds(),
-		}
-		ct.latencyResult = &result
+	if !pingResult.Success {
+		return fmt.Errorf("ping测试无响应")
 	}
+
+	// 创建测试结果并保存
+	result := utils.TestResult{
+		Protocol:    "PING",
+		TestType:    "latency",
+		Direction:   "round-trip",
+		AvgRTT:      pingResult.Latency, // 毫秒值
+		AvgJitter:   pingResult.Jitter,  // 毫秒值
+		SuccessRate: (100 - pingResult.PacketLoss) / 100,
+		Duration:    pingResult.Latency * 10, // 估算值
+	}
+	ct.latencyResult = &result
 
 	return nil
 }
@@ -519,20 +442,21 @@ func (ut *UDPTester) RunUDPTest(serverAddr string, threads int, duration int, ta
 		fmt.Printf("UDP带宽测试失败: %v\n", err)
 	}
 
+	// 提取目标地址用于ping测试
+	addr := conn.RemoteAddr().String()
+	targetHost := addr
+	colonIndex := strings.LastIndex(addr, ":")
+	if colonIndex != -1 {
+		targetHost = addr[:colonIndex]
+	}
+
 	// 执行UDP延迟测试
-	err = ut.runUDPLatencyTest(conn)
+	err = ut.runUDPLatencyTest(targetHost)
 	if err != nil {
 		fmt.Printf("UDP延迟测试失败: %v\n", err)
 	}
 
 	// 统一输出所有结果
-	ut.printCombinedResults()
-
-	return nil
-}
-
-// printCombinedResults 统一输出带宽和延迟测试结果
-func (ut *UDPTester) printCombinedResults() {
 	// 如果两个结果都有，则合并输出
 	if ut.bandwidthResult != nil && ut.latencyResult != nil {
 		combinedResult := utils.TestResult{
@@ -554,6 +478,8 @@ func (ut *UDPTester) printCombinedResults() {
 			utils.PrintStructuredResult(*ut.latencyResult)
 		}
 	}
+
+	return nil
 }
 
 // runUDPBandwidthTest 执行UDP带宽测试
@@ -631,78 +557,36 @@ func (ut *UDPTester) runUDPBandwidthTest(conn *net.UDPConn, threads int, duratio
 	return nil
 }
 
-// runUDPLatencyTest 执行UDP延迟测试
-func (ut *UDPTester) runUDPLatencyTest(conn *net.UDPConn) error {
-
-	packetSize := 64 // 64字节的数据包
-	numPackets := 10 // 发送10个包来测试延迟
-
-	data := make([]byte, packetSize)
-	for i := 0; i < packetSize; i++ {
-		data[i] = byte(i % 256)
+// runUDPLatencyTest 执行基于ping的延迟测试
+func (ut *UDPTester) runUDPLatencyTest(serverAddr string) error {
+	// 提取目标主机用于ping测试
+	targetHost := serverAddr
+	colonIndex := strings.LastIndex(serverAddr, ":")
+	if colonIndex != -1 {
+		targetHost = serverAddr[:colonIndex]
 	}
 
-	startTime := time.Now()
-	totalRTT := time.Duration(0)
-	successfulPackets := 0
-	jitter := time.Duration(0)
-
-	var lastRTT time.Duration
-
-	for i := 0; i < numPackets; i++ {
-		sendTime := time.Now()
-
-		// 发送UDP数据包
-		_, err := conn.Write(data)
-		if err != nil {
-			continue
-		}
-
-		// 设置读取超时
-		conn.SetReadDeadline(time.Now().Add(ut.Timeout))
-
-		// 尝试读取响应
-		buf := make([]byte, 1024)
-		_, err = conn.Read(buf)
-		if err != nil {
-			continue
-		}
-
-		receiveTime := time.Now()
-		rtt := receiveTime.Sub(sendTime)
-		totalRTT += rtt
-		successfulPackets++
-
-		// 计算抖动（RTT变化）
-		if lastRTT != 0 {
-			diff := rtt - lastRTT
-			if diff < 0 {
-				diff = -diff
-			}
-			jitter += diff
-		}
-		lastRTT = rtt
+	// 使用ping进行延迟测试
+	pingResult, err := utils.PingTarget(targetHost, 10) // 发送10个ping包
+	if err != nil {
+		return fmt.Errorf("ping测试失败: %v", err)
 	}
 
-	if successfulPackets > 0 {
-		avgRTT := totalRTT / time.Duration(successfulPackets)
-		var avgJitter time.Duration
-		if successfulPackets > 1 {
-			avgJitter = jitter / time.Duration(successfulPackets-1)
-		}
-
-		// 创建测试结果并保存
-		result := utils.TestResult{
-			Protocol:    "UDP",
-			TestType:    "latency",
-			Direction:   "round-trip",
-			AvgRTT:      float64(avgRTT),
-			AvgJitter:   float64(avgJitter),
-			SuccessRate: float64(successfulPackets) / float64(numPackets),
-			Duration:    time.Since(startTime).Seconds(),
-		}
-		ut.latencyResult = &result
+	if !pingResult.Success {
+		return fmt.Errorf("ping测试无响应")
 	}
+
+	// 创建测试结果并保存
+	result := utils.TestResult{
+		Protocol:    "PING",
+		TestType:    "latency",
+		Direction:   "round-trip",
+		AvgRTT:      pingResult.Latency, // 毫秒值
+		AvgJitter:   pingResult.Jitter,  // 毫秒值
+		SuccessRate: (100 - pingResult.PacketLoss) / 100,
+		Duration:    pingResult.Latency * 10, // 估算值
+	}
+	ut.latencyResult = &result
 
 	return nil
 }

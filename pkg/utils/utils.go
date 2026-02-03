@@ -56,8 +56,8 @@ type TestResult struct {
 	TestType    string  `json:"test_type"`    // 测试类型 (bandwidth/latency)
 	Direction   string  `json:"direction"`    // 方向 (uplink/downlink)
 	Throughput  float64 `json:"throughput"`   // 吞吐量 (bytes/s)
-	AvgRTT      float64 `json:"avg_rtt"`      // 平均往返时间 (ns)
-	AvgJitter   float64 `json:"avg_jitter"`   // 平均抖动 (ns)
+	AvgRTT      float64 `json:"avg_rtt"`      // 平均往返时间 (ms)
+	AvgJitter   float64 `json:"avg_jitter"`   // 平均抖动 (ms)
 	SuccessRate float64 `json:"success_rate"` // 成功率
 	TotalBytes  int64   `json:"total_bytes"`  // 总字节数
 	Duration    float64 `json:"duration"`     // 持续时间 (秒)
@@ -70,9 +70,8 @@ func PrintStructuredResult(result TestResult) {
 	// 如果同时有吞吐量和延迟数据，一起显示
 	if result.Throughput > 0 && result.AvgRTT > 0 {
 		throughputStr := FormatSpeedMbps(result.Throughput)
-		avgRTT := time.Duration(result.AvgRTT)
 		table.AddHeader("网速", "延迟")
-		table.AddLine(throughputStr, avgRTT)
+		table.AddLine(throughputStr, fmt.Sprintf("%.2f ms", result.AvgRTT))
 	} else if result.Throughput > 0 {
 		// 只有网速
 		throughputStr := FormatSpeedMbps(result.Throughput)
@@ -80,9 +79,8 @@ func PrintStructuredResult(result TestResult) {
 		table.AddLine(throughputStr, "0")
 	} else if result.AvgRTT > 0 {
 		// 只有延迟
-		avgRTT := time.Duration(result.AvgRTT)
 		table.AddHeader("网速", "延迟")
-		table.AddLine("0", avgRTT)
+		table.AddLine("0", fmt.Sprintf("%.2f ms", result.AvgRTT))
 	}
 	table.Print()
 }
