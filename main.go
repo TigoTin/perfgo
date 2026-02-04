@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 
 	"github.com/urfave/cli/v2"
 
 	"perfgo/internal/client"
 	"perfgo/internal/server"
+	"perfgo/pkg/utils"
 )
 
 func main() {
@@ -36,6 +38,14 @@ func main() {
 				},
 				Action: func(cCtx *cli.Context) error {
 					return serverAction(cCtx)
+				},
+			},
+			{
+				Name:    "interface",
+				Aliases: []string{"i"},
+				Usage:   "检测网络接口信息（网卡名称、IP、NAT类型）",
+				Action: func(cCtx *cli.Context) error {
+					return interfaceInfoAction(cCtx)
 				},
 			},
 			{
@@ -70,6 +80,12 @@ func main() {
 						Name:  "localip",
 						Value: "",
 						Usage: "本地IP地址 (可选，用于指定源IP进行测试)",
+					},
+					&cli.StringFlag{
+						Name:    "interface",
+						Value:   "all",
+						Usage:   "网络接口名称 (可选，用于指定源接口进行测试；使用 'all' 对所有在线接口进行测试)",
+						Aliases: []string{"iface"},
 					},
 				},
 				Action: func(cCtx *cli.Context) error {
@@ -115,6 +131,12 @@ func main() {
 						Value: "",
 						Usage: "本地IP地址 (可选，用于指定源IP进行测试)",
 					},
+					&cli.StringFlag{
+						Name:    "interface",
+						Value:   "",
+						Usage:   "网络接口名称 (可选，用于指定源接口进行测试；使用 'all' 对所有在线接口进行测试)",
+						Aliases: []string{"iface"},
+					},
 				},
 				Action: func(cCtx *cli.Context) error {
 					return udpTestAction(cCtx)
@@ -149,11 +171,12 @@ func tcpTestAction(cCtx *cli.Context) error {
 	connections := cCtx.Int("connections")
 	duration := cCtx.Int("duration")
 	localIP := cCtx.String("localip")
+	interfaceName := cCtx.String("interface")
 
 	serverAddr := fmt.Sprintf("%s:%s", host, port)
 	tester := client.NewTCPTester()
 
-	return tester.RunTCPTest(serverAddr, connections, duration, localIP)
+	return tester.RunTCPTest(serverAddr, connections, duration, localIP, interfaceName)
 }
 
 func udpTestAction(cCtx *cli.Context) error {
@@ -163,9 +186,23 @@ func udpTestAction(cCtx *cli.Context) error {
 	duration := cCtx.Int("duration")
 	bandwidth := cCtx.String("bandwidth")
 	localIP := cCtx.String("localip")
+	interfaceName := cCtx.String("interface")
 
 	serverAddr := fmt.Sprintf("%s:%s", host, port)
 	tester := client.NewUDPTester()
 
-	return tester.RunUDPTest(serverAddr, connections, duration, bandwidth, localIP)
+	return tester.RunUDPTest(serverAddr, connections, duration, bandwidth, localIP, interfaceName)
+}
+
+func interfaceInfoAction(cCtx *cli.Context) error {
+	fmt.Println("正在检测所有网络接口...")
+	onlineInterfaces, err := utils.GetOnlineNetworkInterfaces()
+	if err != nil {
+		log.Fatalf("获取在线网络接口失败: %v", err)
+	}
+
+	fmt.Println("\n已联网的网络接口信息:")
+	utils.PrintNetworkInterfaceInfo(onlineInterfaces)
+
+	return nil
 }

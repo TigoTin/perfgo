@@ -63,6 +63,14 @@ type TestResult struct {
 	Duration    float64 `json:"duration"`     // 持续时间 (秒)
 }
 
+// InterfaceTestResult 带有接口信息的测试结果结构
+type InterfaceTestResult struct {
+	TestResult           // 嵌入基本测试结果
+	InterfaceName string // 网络接口名称
+	NATType       string // NAT类型
+	Error         error  // 错误信息
+}
+
 // PrintStructuredResult 打印结构化测试结果
 func PrintStructuredResult(result TestResult) {
 	table := tabby.New()
@@ -81,6 +89,17 @@ func PrintStructuredResult(result TestResult) {
 		// 只有延迟
 		table.AddHeader("网速", "延迟")
 		table.AddLine("0", fmt.Sprintf("%.2f ms", result.AvgRTT))
+	}
+	table.Print()
+}
+
+// PrintStructuredResult 打印结构化测试结果
+func PrintStructuredInterfaceResult(result []InterfaceTestResult) {
+	table := tabby.New()
+	table.AddHeader("接口名称", "NAT类型", "网速", "延迟")
+	for _, result := range result {
+		throughputStr := FormatSpeedMbps(result.Throughput)
+		table.AddLine(result.InterfaceName, result.NATType, throughputStr, fmt.Sprintf("%.2f ms", result.AvgRTT))
 	}
 	table.Print()
 }

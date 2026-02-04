@@ -107,7 +107,7 @@ func detectNATTypeByInterface(interfaceName string) (natType, publicIP string, e
 	}
 
 	client := stun.NewClient()
-	client.SetServerAddr("stun.l.google.com:19302")
+	client.SetServerAddr("stun.aliyun.com:3478")
 	client.SetLocalIP(localIP)
 
 	nat, pubIP, discoverErr := client.Discover()
@@ -169,4 +169,40 @@ func CheckAllNetworkInterfaces() ([]NetworkCheckResult, error) {
 	}
 
 	return results, nil
+}
+
+func GetNetworkInterfaces() {
+	// 获取所有网络接口
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		fmt.Printf("Error getting interfaces: %v\n", err)
+		return
+	}
+	for _, iface := range interfaces {
+		fmt.Printf("Interface: %s\n", iface.Name)
+		fmt.Printf("  Index: %d\n", iface.Index)
+		fmt.Printf("  MTU: %d\n", iface.MTU)
+		fmt.Printf("  Flags: %v\n", iface.Flags)
+
+		// 获取接口地址
+		addrs, err := iface.Addrs()
+		if err != nil {
+			fmt.Printf("  Error getting addresses: %v\n", err)
+			continue
+		}
+
+		for _, addr := range addrs {
+			fmt.Printf("  Address: %s\n", addr.String())
+
+			// 判断是否为 IPv4
+			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+				if ipnet.IP.To4() != nil {
+					fmt.Printf("  IPv4: %s\n", ipnet.IP.String())
+				} else {
+					fmt.Printf("  IPv6: %s\n", ipnet.IP.String())
+				}
+			}
+		}
+		fmt.Println()
+	}
 }

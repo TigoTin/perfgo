@@ -26,10 +26,18 @@ func NewTCPTester() *TCPTester {
 }
 
 // RunTCPTest 执行TCP测试（带宽和延迟） - 支持多连接并发
-func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int, localIP string) error {
+func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int, localIP string, interfaceName string) error {
 	fmt.Printf("TCP测试参数 - 目标: %s, 连接数: %d, 时长: %d秒\n", serverAddr, connections, duration)
 	if localIP != "" {
 		fmt.Printf("本地IP: %s\n", localIP)
+	}
+	if interfaceName != "" {
+		fmt.Printf("网络接口: %s\n", interfaceName)
+	}
+
+	// 如果interfaceName为"all"，则对所有在线网络接口进行测试并聚合结果
+	if interfaceName == "all" {
+		return ct.runTCPTestOnAllInterfacesAggregated(serverAddr, connections, duration)
 	}
 
 	// 用于收集所有连接的测试结果
@@ -398,6 +406,290 @@ func (ct *TCPTester) runTCPLatencyTest(serverAddr string) error {
 	return nil
 }
 
+// runTCPTestOnAllInterfacesAggregated 在所有在线网络接口上执行TCP测试并聚合结果
+func (ct *TCPTester) runTCPTestOnAllInterfacesAggregated(serverAddr string, connections int, duration int) error {
+	fmt.Println("正在获取所有在线网络接口...")
+	interfaces, err := utils.GetOnlineNetworkInterfaces()
+	if err != nil {
+		return fmt.Errorf("获取在线网络接口失败: %v", err)
+	}
+
+	if len(interfaces) == 0 {
+		return fmt.Errorf("未找到任何在线网络接口")
+	}
+
+	fmt.Printf("发现 %d 个在线网络接口，开始逐个测试并聚合结果:\n\n", len(interfaces))
+
+	// 存储每个接口的测试结果
+	var results []utils.InterfaceTestResult
+
+	for i, iface := range interfaces {
+		fmt.Printf("=== 测试第 %d/%d 个网络接口: %s (IP: %s, NAT类型: %s) ===\n",
+			i+1, len(interfaces), iface.Name, iface.IP, iface.NATType)
+
+		// 使用接口的IP地址进行测试
+		result := utils.TestResult{}
+		// 创建临时变量来捕获单个接口的测试结果
+		tempResults := make([]struct {
+			bandwidth *utils.TestResult
+			latency   *utils.TestResult
+			err       error
+		}, connections)
+
+		// 实际执行测试
+		tempResults = ct.runSingleInterfaceTestDetailed(iface.IP, serverAddr, connections, duration)
+
+		// 计算单个接口的聚合结果
+		var totalBytes int64
+		var totalDuration float64
+		var latencies []float64
+		var jitters []float64
+		successCount := 0
+
+		for _, res := range tempResults {
+			if res.err != nil {
+				continue
+			}
+			if res.bandwidth != nil {
+				totalBytes += res.bandwidth.TotalBytes
+				totalDuration += res.bandwidth.Duration
+				successCount++
+			}
+			if res.latency != nil {
+				latencies = append(latencies, res.latency.AvgRTT)
+				jitters = append(jitters, res.latency.AvgJitter)
+			}
+		}
+
+		if successCount > 0 {
+			avgDuration := totalDuration / float64(successCount)
+			aggregateThroughput := float64(totalBytes) / avgDuration
+
+			// 计算平均延迟和抖动
+			var avgRTT, avgJitter float64
+			if len(latencies) > 0 {
+				for _, rtt := range latencies {
+					avgRTT += rtt
+				}
+				avgRTT /= float64(len(latencies))
+
+				for _, jitter := range jitters {
+					avgJitter += jitter
+				}
+				avgJitter /= float64(len(jitters))
+			}
+
+			result = utils.TestResult{
+				Protocol:   "TCP",
+				TestType:   "combined",
+				Direction:  "uplink",
+				Throughput: aggregateThroughput,
+				TotalBytes: totalBytes,
+				AvgRTT:     avgRTT,
+				AvgJitter:  avgJitter,
+				Duration:   avgDuration,
+			}
+
+			fmt.Printf("接口 %s 测试完成\n", iface.Name)
+		} else {
+			fmt.Printf("接口 %s 测试失败: 所有连接均失败\n", iface.Name)
+		}
+
+		interfaceResult := utils.InterfaceTestResult{
+			TestResult:    result,
+			InterfaceName: iface.Name,
+			NATType:       iface.NATType,
+			Error:         nil,
+		}
+		if successCount == 0 {
+			interfaceResult.Error = fmt.Errorf("所有连接均失败")
+		}
+		results = append(results, interfaceResult)
+		fmt.Println()
+	}
+
+	// 输出每个接口的详细结果
+	fmt.Println("========== 各网络接口详细测试结果 ==========")
+	// fmt.Printf("%-15s %-20s %-15s %-20s %-15s %-15s\n", "网卡名称", "NAT类型", "协议", "吞吐量(B/s)", "平均RTT(ms)", "平均抖动(ms)")
+	// fmt.Printf("%-15s %-20s %-15s %-20s %-15s %-15s\n",
+	// 	"---------------", "--------------------", "---------------", "------------------", "---------------", "---------------")
+
+	// for _, res := range results {
+	// 	if res.Error == nil {
+	// 		fmt.Printf("%-15s %-20s %-15s %-20.2f %-15.2f %-15.2f\n",
+	// 			res.InterfaceName,
+	// 			res.NATType,
+	// 			res.Protocol,
+	// 			res.Throughput,
+	// 			res.AvgRTT,
+	// 			res.AvgJitter)
+	// 	} else {
+	// 		fmt.Printf("%-15s %-20s %-15s %-20s %-15s %-15s\n",
+	// 			res.InterfaceName,
+	// 			res.NATType,
+	// 			"ERROR",
+	// 			"N/A",
+	// 			"N/A",
+	// 			"N/A")
+	// 	}
+	// }
+
+	utils.PrintStructuredInterfaceResult(results)
+	return nil
+}
+
+// runSingleInterfaceTestDetailed 辅助方法，用于测试单个接口
+func (ct *TCPTester) runSingleInterfaceTestDetailed(localIP string, serverAddr string, connections int, duration int) []struct {
+	bandwidth *utils.TestResult
+	latency   *utils.TestResult
+	err       error
+} {
+	// 用于收集所有连接的测试结果
+	type connResult struct {
+		bandwidth *utils.TestResult
+		latency   *utils.TestResult
+		err       error
+	}
+
+	resultChan := make(chan connResult, connections)
+	var wg sync.WaitGroup
+
+	// 启动多个独立的TCP连接进行并发测试
+	for i := 0; i < connections; i++ {
+		wg.Add(1)
+		go func(connID int) {
+			defer wg.Done()
+
+			// 每个连接独立建立
+			var conn net.Conn
+			var err error
+
+			if localIP != "" {
+				// 使用本地IP绑定连接
+				localAddr, err := net.ResolveTCPAddr("tcp", localIP+":0")
+				if err != nil {
+					resultChan <- connResult{err: fmt.Errorf("连接%d: 解析本地TCP地址失败: %v", connID, err)}
+					return
+				}
+				remoteAddr, err := net.ResolveTCPAddr("tcp", serverAddr)
+				if err != nil {
+					resultChan <- connResult{err: fmt.Errorf("连接%d: 解析远程TCP地址失败: %v", connID, err)}
+					return
+				}
+				dialer := net.Dialer{
+					LocalAddr: localAddr,
+				}
+				conn, err = dialer.Dial("tcp", remoteAddr.String())
+				if err != nil {
+					resultChan <- connResult{err: fmt.Errorf("连接%d: 连接到服务器失败: %v", connID, err)}
+					return
+				}
+			} else {
+				conn, err = net.Dial("tcp", serverAddr)
+				if err != nil {
+					resultChan <- connResult{err: fmt.Errorf("连接%d: 连接到服务器失败: %v", connID, err)}
+					return
+				}
+			}
+			defer conn.Close()
+
+			// 发送测试请求
+			msg := &protocol.Message{
+				Type:     protocol.TypeTestRequest,
+				TestType: "tcp",
+				Payload: map[string]interface{}{
+					"test_type": "tcp",
+					"threads":   1, // 每个连接内部单线程
+					"duration":  duration,
+				},
+			}
+
+			err = msg.Send(conn)
+			if err != nil {
+				resultChan <- connResult{err: fmt.Errorf("连接%d: 发送TCP测试请求失败: %v", connID, err)}
+				return
+			}
+
+			// 创建通道用于接收测试结果
+			bwResultChan := make(chan *utils.TestResult, 1)
+			latResultChan := make(chan *utils.TestResult, 1)
+			errChan := make(chan error, 2)
+
+			// 提取目标地址用于ping测试
+			targetHost := serverAddr
+			colonIndex := strings.LastIndex(serverAddr, ":")
+			if colonIndex != -1 {
+				targetHost = serverAddr[:colonIndex]
+			}
+
+			// 并行执行带宽测试和延迟测试
+			go func() {
+				bwResult, err := ct.runSingleConnectionBandwidthTest(conn, duration)
+				if err != nil {
+					errChan <- fmt.Errorf("连接%d: TCP带宽测试失败: %v", connID, err)
+					bwResultChan <- nil
+				} else {
+					bwResultChan <- bwResult
+				}
+			}()
+
+			go func() {
+				latResult, err := ct.runSingleConnectionLatencyTest(targetHost)
+				if err != nil {
+					errChan <- fmt.Errorf("连接%d: TCP延迟测试失败: %v", connID, err)
+					latResultChan <- nil
+				} else {
+					latResultChan <- latResult
+				}
+			}()
+
+			// 等待测试结果
+			var bwResult *utils.TestResult
+			var latResult *utils.TestResult
+
+			// 等待两个测试完成
+			for i := 0; i < 2; i++ {
+				select {
+				case bwRes := <-bwResultChan:
+					bwResult = bwRes
+				case latRes := <-latResultChan:
+					latResult = latRes
+				case err := <-errChan:
+					fmt.Printf("%v\n", err)
+				}
+			}
+
+			resultChan <- connResult{
+				bandwidth: bwResult,
+				latency:   latResult,
+			}
+		}(i)
+	}
+
+	// 等待所有连接完成
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// 收集结果
+	var results []struct {
+		bandwidth *utils.TestResult
+		latency   *utils.TestResult
+		err       error
+	}
+
+	for result := range resultChan {
+		results = append(results, struct {
+			bandwidth *utils.TestResult
+			latency   *utils.TestResult
+			err       error
+		}{result.bandwidth, result.latency, result.err})
+	}
+
+	return results
+}
+
 // UDPTester UDP测试客户端
 type UDPTester struct {
 	Timeout         time.Duration
@@ -413,7 +705,7 @@ func NewUDPTester() *UDPTester {
 }
 
 // RunUDPTest 执行UDP测试（带宽和延迟）
-func (ut *UDPTester) RunUDPTest(serverAddr string, threads int, duration int, targetBandwidth string, localIP string) error {
+func (ut *UDPTester) RunUDPTest(serverAddr string, threads int, duration int, targetBandwidth string, localIP string, interfaceName string) error {
 	fmt.Printf("UDP测试参数 - 目标: %s, 线程数: %d, 时长: %d秒", serverAddr, threads, duration)
 	if targetBandwidth != "" {
 		fmt.Printf(", 目标带宽: %s", targetBandwidth)
@@ -421,7 +713,15 @@ func (ut *UDPTester) RunUDPTest(serverAddr string, threads int, duration int, ta
 	if localIP != "" {
 		fmt.Printf(", 本地IP: %s", localIP)
 	}
+	if interfaceName != "" {
+		fmt.Printf(", 网络接口: %s", interfaceName)
+	}
 	fmt.Printf("\n")
+
+	// 如果interfaceName为"all"，则对所有在线网络接口进行测试并聚合结果
+	if interfaceName == "all" {
+		return ut.runUDPTestOnAllInterfacesAggregated(serverAddr, threads, duration, targetBandwidth)
+	}
 
 	// 解析UDP地址
 	udpAddr, err := net.ResolveUDPAddr("udp", serverAddr)
@@ -587,6 +887,102 @@ func (ut *UDPTester) runUDPLatencyTest(serverAddr string) error {
 		Duration:    pingResult.Latency * 10, // 估算值
 	}
 	ut.latencyResult = &result
+
+	return nil
+}
+
+// runUDPTestOnAllInterfacesAggregated 在所有在线网络接口上执行UDP测试并聚合结果
+func (ut *UDPTester) runUDPTestOnAllInterfacesAggregated(serverAddr string, threads int, duration int, targetBandwidth string) error {
+	fmt.Println("正在获取所有在线网络接口...")
+	interfaces, err := utils.GetOnlineNetworkInterfaces()
+	if err != nil {
+		return fmt.Errorf("获取在线网络接口失败: %v", err)
+	}
+
+	if len(interfaces) == 0 {
+		return fmt.Errorf("未找到任何在线网络接口")
+	}
+
+	fmt.Printf("发现 %d 个在线网络接口，开始逐个测试并聚合结果:\n\n", len(interfaces))
+
+	// 存储每个接口的测试结果
+	var results []utils.InterfaceTestResult
+
+	for i, iface := range interfaces {
+		fmt.Printf("=== 测试第 %d/%d 个网络接口: %s (IP: %s, NAT类型: %s) ===\n",
+			i+1, len(interfaces), iface.Name, iface.IP, iface.NATType)
+
+		// 为每个接口创建单独的测试实例
+		tester := NewUDPTester()
+		// 使用接口的IP地址进行测试
+		err := tester.RunUDPTest(serverAddr, threads, duration, targetBandwidth, iface.IP, "")
+		if err != nil {
+			fmt.Printf("接口 %s 测试失败: %v\n", iface.Name, err)
+			interfaceResult := utils.InterfaceTestResult{
+				TestResult:    utils.TestResult{},
+				InterfaceName: iface.Name,
+				NATType:       iface.NATType,
+				Error:         err,
+			}
+			results = append(results, interfaceResult)
+			fmt.Println()
+			continue
+		}
+
+		// 构建包含接口信息的结果
+		var result utils.TestResult
+		if tester.bandwidthResult != nil && tester.latencyResult != nil {
+			result = utils.TestResult{
+				Protocol:   tester.bandwidthResult.Protocol,
+				TestType:   "combined",
+				Direction:  tester.bandwidthResult.Direction,
+				Throughput: tester.bandwidthResult.Throughput,
+				AvgRTT:     tester.latencyResult.AvgRTT,
+				AvgJitter:  tester.latencyResult.AvgJitter,
+				Duration:   tester.bandwidthResult.Duration,
+			}
+		} else if tester.bandwidthResult != nil {
+			result = *tester.bandwidthResult
+		} else if tester.latencyResult != nil {
+			result = *tester.latencyResult
+		}
+
+		interfaceResult := utils.InterfaceTestResult{
+			TestResult:    result,
+			InterfaceName: iface.Name,
+			NATType:       iface.NATType,
+			Error:         nil,
+		}
+		results = append(results, interfaceResult)
+		fmt.Printf("接口 %s 测试完成\n", iface.Name)
+		fmt.Println()
+	}
+
+	// 输出每个接口的详细结果
+	fmt.Println("========== 各网络接口详细测试结果 ==========")
+	fmt.Printf("%-15s %-20s %-15s %-20s %-15s %-15s\n", "网卡名称", "NAT类型", "协议", "吞吐量(B/s)", "平均RTT(ms)", "平均抖动(ms)")
+	fmt.Printf("%-15s %-20s %-15s %-20s %-15s %-15s\n",
+		"---------------", "--------------------", "---------------", "------------------", "---------------", "---------------")
+
+	for _, res := range results {
+		if res.Error == nil {
+			fmt.Printf("%-15s %-20s %-15s %-20.2f %-15.2f %-15.2f\n",
+				res.InterfaceName,
+				res.NATType,
+				res.Protocol,
+				res.Throughput,
+				res.AvgRTT,
+				res.AvgJitter)
+		} else {
+			fmt.Printf("%-15s %-20s %-15s %-20s %-15s %-15s\n",
+				res.InterfaceName,
+				res.NATType,
+				"ERROR",
+				"N/A",
+				"N/A",
+				"N/A")
+		}
+	}
 
 	return nil
 }
