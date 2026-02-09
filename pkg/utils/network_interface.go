@@ -127,8 +127,21 @@ func detectNATTypeForInterface(interfaceName, localIP string) (natType, publicIP
 			publicIPStr = ""
 		}
 
+		switch nat {
+		case stun.NATFull:
+			natType = "NAT1"
+		case stun.NATRestricted:
+			natType = "NAT2"
+		case stun.NATPortRestricted:
+			natType = "NAT3"
+		case stun.NATSymetric:
+			natType = "NAT4"
+		default:
+			natType = "Unknown"
+		}
+
 		// 成功检测到NAT类型，返回结果
-		return nat.String(), publicIPStr, nil
+		return natType, publicIPStr, nil
 	}
 
 	// 所有STUN服务器都失败
