@@ -11,21 +11,54 @@ import (
 	"perfgo/pkg/utils"
 )
 
-// TCPTester TCP测试客户端
+const (
+	DefaultTimeout      = 30 * time.Second
+	DefaultBufferSize   = 32 * 1024 // 32KB
+	DefaultPingCount    = 10
+	channelBufferSize   = 1
+)
+
+type connResult struct {
+	bandwidth *utils.TestResult
+	latency   *utils.TestResult
+	err       error
+}
+
+func dialTCP(serverAddr, localIP string) (net.Conn, error) {
+	if localIP != "" {
+		localAddr, err := net.ResolveTCPAddr("tcp", localIP+":0")
+		if err != nil {
+			return nil, fmt.Errorf("解析本地TCP地址失败: %v", err)
+		}
+		remoteAddr, err := net.ResolveTCPAddr("tcp", serverAddr)
+		if err != nil {
+			return nil, fmt.Errorf("解析远程TCP地址失败: %v", err)
+		}
+		dialer := net.Dialer{LocalAddr: localAddr}
+		return dialer.Dial("tcp", remoteAddr.String())
+	}
+	return net.Dial("tcp", serverAddr)
+}
+
+func extractHost(serverAddr string) string {
+	if idx := strings.LastIndex(serverAddr, ":"); idx != -1 {
+		return serverAddr[:idx]
+	}
+	return serverAddr
+}
+
 type TCPTester struct {
 	Timeout         time.Duration
 	bandwidthResult *utils.TestResult
 	latencyResult   *utils.TestResult
 }
 
-// NewTCPTester 创建TCP测试客户端
 func NewTCPTester() *TCPTester {
 	return &TCPTester{
-		Timeout: 30 * time.Second,
+		Timeout: DefaultTimeout,
 	}
 }
 
-// RunTCPTest 执行TCP测试（带宽和延迟） - 支持多连接并发
 func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int, localIP string, interfaceName string) error {
 	fmt.Printf("TCP测试参数 - 目标: %s, 连接数: %d, 时长: %d秒\n", serverAddr, connections, duration)
 	if localIP != "" {
@@ -35,90 +68,46 @@ func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int
 		fmt.Printf("网络接口: %s\n", interfaceName)
 	}
 
-	// 如果interfaceName为"all"，则对所有在线网络接口进行测试并聚合结果
 	if interfaceName == "all" {
 		return ct.runTCPTestOnAllInterfacesAggregated(serverAddr, connections, duration)
-	}
-
-	// 用于收集所有连接的测试结果
-	type connResult struct {
-		bandwidth *utils.TestResult
-		latency   *utils.TestResult
-		err       error
 	}
 
 	resultChan := make(chan connResult, connections)
 	var wg sync.WaitGroup
 
-	// 启动多个独立的TCP连接进行并发测试
 	for i := 0; i < connections; i++ {
 		wg.Add(1)
 		go func(connID int) {
 			defer wg.Done()
 
-			// 每个连接独立建立
-			var conn net.Conn
-			var err error
-
-			if localIP != "" {
-				// 使用本地IP绑定连接
-				localAddr, err := net.ResolveTCPAddr("tcp", localIP+":0")
-				if err != nil {
-					resultChan <- connResult{err: fmt.Errorf("连接%d: 解析本地TCP地址失败: %v", connID, err)}
-					return
-				}
-				remoteAddr, err := net.ResolveTCPAddr("tcp", serverAddr)
-				if err != nil {
-					resultChan <- connResult{err: fmt.Errorf("连接%d: 解析远程TCP地址失败: %v", connID, err)}
-					return
-				}
-				dialer := net.Dialer{
-					LocalAddr: localAddr,
-				}
-				conn, err = dialer.Dial("tcp", remoteAddr.String())
-				if err != nil {
-					resultChan <- connResult{err: fmt.Errorf("连接%d: 连接到服务器失败: %v", connID, err)}
-					return
-				}
-			} else {
-				conn, err = net.Dial("tcp", serverAddr)
-				if err != nil {
-					resultChan <- connResult{err: fmt.Errorf("连接%d: 连接到服务器失败: %v", connID, err)}
-					return
-				}
+			conn, err := dialTCP(serverAddr, localIP)
+			if err != nil {
+				resultChan <- connResult{err: fmt.Errorf("连接%d: %v", connID, err)}
+				return
 			}
 			defer conn.Close()
 
-			// 发送测试请求
 			msg := &protocol.Message{
 				Type:     protocol.TypeTestRequest,
 				TestType: "tcp",
 				Payload: map[string]interface{}{
 					"test_type": "tcp",
-					"threads":   1, // 每个连接内部单线程
+					"threads":   1,
 					"duration":  duration,
 				},
 			}
 
-			err = msg.Send(conn)
-			if err != nil {
+			if err := msg.Send(conn); err != nil {
 				resultChan <- connResult{err: fmt.Errorf("连接%d: 发送TCP测试请求失败: %v", connID, err)}
 				return
 			}
 
-			// 创建通道用于接收测试结果
-			bwResultChan := make(chan *utils.TestResult, 1)
-			latResultChan := make(chan *utils.TestResult, 1)
+			bwResultChan := make(chan *utils.TestResult, channelBufferSize)
+			latResultChan := make(chan *utils.TestResult, channelBufferSize)
 			errChan := make(chan error, 2)
 
-			// 提取目标地址用于ping测试
-			targetHost := serverAddr
-			colonIndex := strings.LastIndex(serverAddr, ":")
-			if colonIndex != -1 {
-				targetHost = serverAddr[:colonIndex]
-			}
+			targetHost := extractHost(serverAddr)
 
-			// 并行执行带宽测试和延迟测试
 			go func() {
 				bwResult, err := ct.runSingleConnectionBandwidthTest(conn, duration)
 				if err != nil {
@@ -139,11 +128,9 @@ func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int
 				}
 			}()
 
-			// 等待测试结果
 			var bwResult *utils.TestResult
 			var latResult *utils.TestResult
 
-			// 等待两个测试完成
 			for i := 0; i < 2; i++ {
 				select {
 				case bwRes := <-bwResultChan:
@@ -155,14 +142,10 @@ func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int
 				}
 			}
 
-			resultChan <- connResult{
-				bandwidth: bwResult,
-				latency:   latResult,
-			}
+			resultChan <- connResult{bandwidth: bwResult, latency: latResult}
 		}(i)
 	}
 
-	// 等待所有连接完成
 	go func() {
 		wg.Wait()
 		close(resultChan)
@@ -231,37 +214,32 @@ func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int
 	return nil
 }
 
-// runSingleConnectionBandwidthTest 执行TCP带宽测试（单连接单线程）
 func (ct *TCPTester) runSingleConnectionBandwidthTest(conn net.Conn, duration int) (*utils.TestResult, error) {
 	startTime := time.Now()
 	endTime := startTime.Add(time.Duration(duration) * time.Second)
 
-	// 设置总的写入超时时间
 	conn.SetWriteDeadline(endTime)
 
 	var totalBytes int64
 
-	// 准备数据块
-	data := make([]byte, 32*1024) // 32KB
+	data := make([]byte, DefaultBufferSize)
 	for i := range data {
 		data[i] = byte(i % 256)
 	}
 
-	// 单线程发送测试
 	for {
 		n, err := conn.Write(data)
 		if n > 0 {
 			totalBytes += int64(n)
 		}
 		if err != nil {
-			// 写入超时或连接关闭，退出
 			break
 		}
 	}
 
 	elapsed := time.Since(startTime)
 	if elapsed.Seconds() == 0 {
-		elapsed = time.Second // 防止除零错误
+		elapsed = time.Second
 	}
 	throughput := float64(totalBytes) / elapsed.Seconds()
 
@@ -275,10 +253,8 @@ func (ct *TCPTester) runSingleConnectionBandwidthTest(conn net.Conn, duration in
 	}, nil
 }
 
-// runSingleConnectionLatencyTest 执行基于ping的延迟测试（单连接）
 func (ct *TCPTester) runSingleConnectionLatencyTest(target string) (*utils.TestResult, error) {
-	// 使用ping进行延迟测试
-	pingResult, err := utils.PingTarget(target, 10) // 发送10个ping包
+	pingResult, err := utils.PingTarget(target, DefaultPingCount)
 	if err != nil {
 		return nil, fmt.Errorf("ping测试失败: %v", err)
 	}
@@ -291,98 +267,17 @@ func (ct *TCPTester) runSingleConnectionLatencyTest(target string) (*utils.TestR
 		Protocol:    "PING",
 		TestType:    "latency",
 		Direction:   "round-trip",
-		AvgRTT:      pingResult.Latency, // 毫秒值
-		AvgJitter:   pingResult.Jitter,  // 毫秒值
+		AvgRTT:      pingResult.Latency,
+		AvgJitter:   pingResult.Jitter,
 		SuccessRate: (100 - pingResult.PacketLoss) / 100,
-		Duration:    pingResult.Latency * 10, // 估算值
+		Duration:    pingResult.Latency * DefaultPingCount,
 	}, nil
 }
 
-// runTCPBandwidthTest 执行TCP带宽测试（旧方法，保留以兼容）
-func (ct *TCPTester) runTCPBandwidthTest(conn net.Conn, threads int, duration int, serverAddr string) error {
-	startTime := time.Now()
-	endTime := startTime.Add(time.Duration(duration) * time.Second)
-
-	// 设置总的写入超时时间，避免在循环中重复检查时间或设置超时，提高压测准确性
-	conn.SetWriteDeadline(endTime)
-
-	var totalBytes int64
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-
-	// 准备数据块
-	data := make([]byte, 32*1024) // 32KB
-	for i := range data {
-		data[i] = byte(i % 256)
-	}
-
-	// 多线程发送测试（测量上行带宽）
-	// 注意：在单个 TCP 连接上使用多个 goroutine 并发写入通常不会增加物理带宽，
-	// 甚至可能因为锁竞争导致性能下降。为了获得更好的压测效果，建议增加连接数。
-	for i := 0; i < threads; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
-			threadBytes := int64(0)
-
-			for {
-				n, err := conn.Write(data)
-				if n > 0 {
-					threadBytes += int64(n)
-				}
-				if err != nil {
-					// 写入超时或连接关闭，退出
-					break
-				}
-			}
-
-			mu.Lock()
-			totalBytes += threadBytes
-			mu.Unlock()
-		}()
-	}
-
-	// 等待所有协程完成
-	wg.Wait()
-
-	elapsed := time.Since(startTime)
-	if elapsed.Seconds() == 0 {
-		elapsed = time.Second // 防止除零错误
-	}
-	throughput := float64(totalBytes) / elapsed.Seconds()
-
-	// 创建测试结果并保存
-	result := utils.TestResult{
-		Protocol:   "TCP",
-		TestType:   "bandwidth",
-		Direction:  "uplink",
-		Throughput: throughput,
-		TotalBytes: totalBytes,
-		Duration:   elapsed.Seconds(),
-	}
-	ct.bandwidthResult = &result
-
-	// 执行延迟测试
-	err := ct.runTCPLatencyTest(serverAddr)
-	if err != nil {
-		fmt.Printf("TCP延迟测试失败: %v\n", err)
-	}
-
-	return nil
-}
-
-// runTCPLatencyTest 执行基于ping的延迟测试
 func (ct *TCPTester) runTCPLatencyTest(serverAddr string) error {
-	// 提取目标主机用于ping测试
-	targetHost := serverAddr
-	colonIndex := strings.LastIndex(serverAddr, ":")
-	if colonIndex != -1 {
-		targetHost = serverAddr[:colonIndex]
-	}
+	targetHost := extractHost(serverAddr)
 
-	// 使用ping进行延迟测试
-	pingResult, err := utils.PingTarget(targetHost, 10) // 发送10个ping包
+	pingResult, err := utils.PingTarget(targetHost, DefaultPingCount)
 	if err != nil {
 		return fmt.Errorf("ping测试失败: %v", err)
 	}
@@ -391,15 +286,14 @@ func (ct *TCPTester) runTCPLatencyTest(serverAddr string) error {
 		return fmt.Errorf("ping测试无响应")
 	}
 
-	// 创建测试结果并保存
 	result := utils.TestResult{
 		Protocol:    "PING",
 		TestType:    "latency",
 		Direction:   "round-trip",
-		AvgRTT:      pingResult.Latency, // 毫秒值
-		AvgJitter:   pingResult.Jitter,  // 毫秒值
+		AvgRTT:      pingResult.Latency,
+		AvgJitter:   pingResult.Jitter,
 		SuccessRate: (100 - pingResult.PacketLoss) / 100,
-		Duration:    pingResult.Latency * 10, // 估算值
+		Duration:    pingResult.Latency * DefaultPingCount,
 	}
 	ct.latencyResult = &result
 
@@ -429,15 +323,7 @@ func (ct *TCPTester) runTCPTestOnAllInterfacesAggregated(serverAddr string, conn
 
 		// 使用接口的IP地址进行测试
 		result := utils.TestResult{}
-		// 创建临时变量来捕获单个接口的测试结果
-		tempResults := make([]struct {
-			bandwidth *utils.TestResult
-			latency   *utils.TestResult
-			err       error
-		}, connections)
-
-		// 实际执行测试
-		tempResults = ct.runSingleInterfaceTestDetailed(iface.IP, serverAddr, connections, duration)
+		tempResults := ct.runSingleInterfaceTestDetailed(iface.IP, serverAddr, connections, duration)
 
 		// 计算单个接口的聚合结果
 		var totalBytes int64
@@ -538,91 +424,43 @@ func (ct *TCPTester) runTCPTestOnAllInterfacesAggregated(serverAddr string, conn
 	return nil
 }
 
-// runSingleInterfaceTestDetailed 辅助方法，用于测试单个接口
-func (ct *TCPTester) runSingleInterfaceTestDetailed(localIP string, serverAddr string, connections int, duration int) []struct {
-	bandwidth *utils.TestResult
-	latency   *utils.TestResult
-	err       error
-} {
-	// 用于收集所有连接的测试结果
-	type connResult struct {
-		bandwidth *utils.TestResult
-		latency   *utils.TestResult
-		err       error
-	}
-
+func (ct *TCPTester) runSingleInterfaceTestDetailed(localIP string, serverAddr string, connections int, duration int) []connResult {
 	resultChan := make(chan connResult, connections)
 	var wg sync.WaitGroup
 
-	// 启动多个独立的TCP连接进行并发测试
 	for i := 0; i < connections; i++ {
 		wg.Add(1)
 		go func(connID int) {
 			defer wg.Done()
 
-			// 每个连接独立建立
-			var conn net.Conn
-			var err error
-
-			if localIP != "" {
-				// 使用本地IP绑定连接
-				localAddr, err := net.ResolveTCPAddr("tcp", localIP+":0")
-				if err != nil {
-					resultChan <- connResult{err: fmt.Errorf("连接%d: 解析本地TCP地址失败: %v", connID, err)}
-					return
-				}
-				remoteAddr, err := net.ResolveTCPAddr("tcp", serverAddr)
-				if err != nil {
-					resultChan <- connResult{err: fmt.Errorf("连接%d: 解析远程TCP地址失败: %v", connID, err)}
-					return
-				}
-				dialer := net.Dialer{
-					LocalAddr: localAddr,
-				}
-				conn, err = dialer.Dial("tcp", remoteAddr.String())
-				if err != nil {
-					resultChan <- connResult{err: fmt.Errorf("连接%d: 连接到服务器失败: %v", connID, err)}
-					return
-				}
-			} else {
-				conn, err = net.Dial("tcp", serverAddr)
-				if err != nil {
-					resultChan <- connResult{err: fmt.Errorf("连接%d: 连接到服务器失败: %v", connID, err)}
-					return
-				}
+			conn, err := dialTCP(serverAddr, localIP)
+			if err != nil {
+				resultChan <- connResult{err: fmt.Errorf("连接%d: %v", connID, err)}
+				return
 			}
 			defer conn.Close()
 
-			// 发送测试请求
 			msg := &protocol.Message{
 				Type:     protocol.TypeTestRequest,
 				TestType: "tcp",
 				Payload: map[string]interface{}{
 					"test_type": "tcp",
-					"threads":   1, // 每个连接内部单线程
+					"threads":   1,
 					"duration":  duration,
 				},
 			}
 
-			err = msg.Send(conn)
-			if err != nil {
+			if err := msg.Send(conn); err != nil {
 				resultChan <- connResult{err: fmt.Errorf("连接%d: 发送TCP测试请求失败: %v", connID, err)}
 				return
 			}
 
-			// 创建通道用于接收测试结果
-			bwResultChan := make(chan *utils.TestResult, 1)
-			latResultChan := make(chan *utils.TestResult, 1)
+			bwResultChan := make(chan *utils.TestResult, channelBufferSize)
+			latResultChan := make(chan *utils.TestResult, channelBufferSize)
 			errChan := make(chan error, 2)
 
-			// 提取目标地址用于ping测试
-			targetHost := serverAddr
-			colonIndex := strings.LastIndex(serverAddr, ":")
-			if colonIndex != -1 {
-				targetHost = serverAddr[:colonIndex]
-			}
+			targetHost := extractHost(serverAddr)
 
-			// 并行执行带宽测试和延迟测试
 			go func() {
 				bwResult, err := ct.runSingleConnectionBandwidthTest(conn, duration)
 				if err != nil {
@@ -643,11 +481,9 @@ func (ct *TCPTester) runSingleInterfaceTestDetailed(localIP string, serverAddr s
 				}
 			}()
 
-			// 等待测试结果
 			var bwResult *utils.TestResult
 			var latResult *utils.TestResult
 
-			// 等待两个测试完成
 			for i := 0; i < 2; i++ {
 				select {
 				case bwRes := <-bwResultChan:
@@ -659,32 +495,18 @@ func (ct *TCPTester) runSingleInterfaceTestDetailed(localIP string, serverAddr s
 				}
 			}
 
-			resultChan <- connResult{
-				bandwidth: bwResult,
-				latency:   latResult,
-			}
+			resultChan <- connResult{bandwidth: bwResult, latency: latResult}
 		}(i)
 	}
 
-	// 等待所有连接完成
 	go func() {
 		wg.Wait()
 		close(resultChan)
 	}()
 
-	// 收集结果
-	var results []struct {
-		bandwidth *utils.TestResult
-		latency   *utils.TestResult
-		err       error
-	}
-
+	var results []connResult
 	for result := range resultChan {
-		results = append(results, struct {
-			bandwidth *utils.TestResult
-			latency   *utils.TestResult
-			err       error
-		}{result.bandwidth, result.latency, result.err})
+		results = append(results, result)
 	}
 
 	return results
