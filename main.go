@@ -83,7 +83,7 @@ func main() {
 					},
 					&cli.StringFlag{
 						Name:    "interface",
-						Value:   "all",
+						Value:   "",
 						Usage:   "网络接口名称 (可选，用于指定源接口进行测试；使用 'all' 对所有在线接口进行测试)",
 						Aliases: []string{"iface"},
 					},

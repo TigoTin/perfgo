@@ -12,10 +12,10 @@ import (
 )
 
 const (
-	DefaultTimeout      = 30 * time.Second
-	DefaultBufferSize   = 32 * 1024 // 32KB
-	DefaultPingCount    = 10
-	channelBufferSize   = 1
+	DefaultTimeout    = 30 * time.Second
+	DefaultBufferSize = 32 * 1024 // 32KB
+	DefaultPingCount  = 10
+	channelBufferSize = 1
 )
 
 type connResult struct {
@@ -60,16 +60,30 @@ func NewTCPTester() *TCPTester {
 }
 
 func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int, localIP string, interfaceName string) error {
-	fmt.Printf("TCP测试参数 - 目标: %s, 连接数: %d, 时长: %d秒\n", serverAddr, connections, duration)
-	if localIP != "" {
-		fmt.Printf("本地IP: %s\n", localIP)
-	}
-	if interfaceName != "" {
-		fmt.Printf("网络接口: %s\n", interfaceName)
-	}
-
 	if interfaceName == "all" {
 		return ct.runTCPTestOnAllInterfacesAggregated(serverAddr, connections, duration)
+	}
+
+	result, err := ct.RunTCPTestWithResult(serverAddr, connections, duration, localIP)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("\n========== 聚合测试结果 (%d个连接) ==========\n", connections)
+	fmt.Printf("吞吐量: %.2f MB/s (%.2f Mbps)\n", result.Throughput/1024/1024, result.ThroughputMbps)
+	fmt.Printf("平均延迟: %.2f ms\n", result.AvgRTT)
+	fmt.Printf("平均抖动: %.2f ms\n", result.AvgJitter)
+	fmt.Printf("总传输字节: %d bytes\n", result.TotalBytes)
+	fmt.Printf("测试时长: %.2f 秒\n", result.Duration)
+
+	return nil
+}
+
+func (ct *TCPTester) RunTCPTestWithResult(serverAddr string, connections int, duration int, localIP string) (*TCPTestResult, error) {
+	type connResult struct {
+		bandwidth *utils.TestResult
+		latency   *utils.TestResult
+		err       error
 	}
 
 	resultChan := make(chan connResult, connections)
@@ -82,7 +96,7 @@ func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int
 
 			conn, err := dialTCP(serverAddr, localIP)
 			if err != nil {
-				resultChan <- connResult{err: fmt.Errorf("连接%d: %v", connID, err)}
+				resultChan <- connResult{err: err}
 				return
 			}
 			defer conn.Close()
@@ -98,7 +112,7 @@ func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int
 			}
 
 			if err := msg.Send(conn); err != nil {
-				resultChan <- connResult{err: fmt.Errorf("连接%d: 发送TCP测试请求失败: %v", connID, err)}
+				resultChan <- connResult{err: err}
 				return
 			}
 
@@ -111,7 +125,7 @@ func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int
 			go func() {
 				bwResult, err := ct.runSingleConnectionBandwidthTest(conn, duration)
 				if err != nil {
-					errChan <- fmt.Errorf("连接%d: TCP带宽测试失败: %v", connID, err)
+					errChan <- err
 					bwResultChan <- nil
 				} else {
 					bwResultChan <- bwResult
@@ -121,7 +135,7 @@ func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int
 			go func() {
 				latResult, err := ct.runSingleConnectionLatencyTest(targetHost)
 				if err != nil {
-					errChan <- fmt.Errorf("连接%d: TCP延迟测试失败: %v", connID, err)
+					errChan <- err
 					latResultChan <- nil
 				} else {
 					latResultChan <- latResult
@@ -131,14 +145,15 @@ func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int
 			var bwResult *utils.TestResult
 			var latResult *utils.TestResult
 
-			for i := 0; i < 2; i++ {
+			for j := 0; j < 2; j++ {
 				select {
 				case bwRes := <-bwResultChan:
 					bwResult = bwRes
 				case latRes := <-latResultChan:
 					latResult = latRes
 				case err := <-errChan:
-					fmt.Printf("%v\n", err)
+					resultChan <- connResult{err: err}
+					return
 				}
 			}
 
@@ -151,7 +166,6 @@ func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int
 		close(resultChan)
 	}()
 
-	// 收集并聚合结果
 	var totalBytes int64
 	var totalDuration float64
 	var latencies []float64
@@ -160,7 +174,6 @@ func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int
 
 	for result := range resultChan {
 		if result.err != nil {
-			fmt.Printf("错误: %v\n", result.err)
 			continue
 		}
 		if result.bandwidth != nil {
@@ -175,14 +188,12 @@ func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int
 	}
 
 	if successCount == 0 {
-		return fmt.Errorf("所有连接均失败")
+		return nil, fmt.Errorf("所有连接均失败")
 	}
 
-	// 计算聚合带宽（所有连接的总吞吐量）
 	avgDuration := totalDuration / float64(successCount)
-	aggregateThroughput := float64(totalBytes) / avgDuration
+	throughput := float64(totalBytes) / avgDuration
 
-	// 计算平均延迟和抖动
 	var avgRTT, avgJitter float64
 	if len(latencies) > 0 {
 		for _, rtt := range latencies {
@@ -196,22 +207,23 @@ func (ct *TCPTester) RunTCPTest(serverAddr string, connections int, duration int
 		avgJitter /= float64(len(jitters))
 	}
 
-	// 输出聚合结果
-	combinedResult := utils.TestResult{
-		Protocol:   "TCP",
-		TestType:   "combined",
-		Direction:  "uplink",
-		Throughput: aggregateThroughput,
-		TotalBytes: totalBytes,
-		AvgRTT:     avgRTT,
-		AvgJitter:  avgJitter,
-		Duration:   avgDuration,
-	}
+	return &TCPTestResult{
+		Throughput:     throughput,
+		ThroughputMbps: throughput * 8 / 1000 / 1000,
+		AvgRTT:         avgRTT,
+		AvgJitter:      avgJitter,
+		TotalBytes:     totalBytes,
+		Duration:       avgDuration,
+	}, nil
+}
 
-	fmt.Printf("\n========== 聚合测试结果 (%d个连接) ==========\n", successCount)
-	utils.PrintStructuredResult(combinedResult)
-
-	return nil
+type TCPTestResult struct {
+	Throughput     float64
+	ThroughputMbps float64
+	AvgRTT         float64
+	AvgJitter      float64
+	TotalBytes     int64
+	Duration       float64
 }
 
 func (ct *TCPTester) runSingleConnectionBandwidthTest(conn net.Conn, duration int) (*utils.TestResult, error) {
@@ -522,84 +534,93 @@ type UDPTester struct {
 // NewUDPTester 创建UDP测试客户端
 func NewUDPTester() *UDPTester {
 	return &UDPTester{
-		Timeout: 30 * time.Second,
+		Timeout: DefaultTimeout,
 	}
+}
+
+type UDPTestResult struct {
+	Throughput     float64
+	ThroughputMbps float64
+	AvgRTT         float64
+	AvgJitter      float64
+	TotalBytes     int64
+	Duration       float64
+}
+
+func (ut *UDPTester) RunUDPTestWithResult(serverAddr string, threads int, duration int, targetBandwidth string, localIP string) (*UDPTestResult, error) {
+	udpAddr, err := net.ResolveUDPAddr("udp", serverAddr)
+	if err != nil {
+		return nil, fmt.Errorf("解析UDP地址失败: %v", err)
+	}
+
+	conn, err := net.DialUDP("udp", nil, udpAddr)
+	if err != nil {
+		return nil, fmt.Errorf("创建UDP连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	startTime := time.Now()
+	endTime := startTime.Add(time.Duration(duration) * time.Second)
+	conn.SetWriteDeadline(endTime)
+
+	var totalBytes int64
+	data := make([]byte, 32*1024)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+
+	for {
+		n, err := conn.Write(data)
+		if n > 0 {
+			totalBytes += int64(n)
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	elapsed := time.Since(startTime)
+	if elapsed.Seconds() == 0 {
+		elapsed = time.Second
+	}
+
+	throughput := float64(totalBytes) / elapsed.Seconds()
+
+	targetHost := extractHost(serverAddr)
+	pingResult, _ := utils.PingTarget(targetHost, 10)
+
+	result := &UDPTestResult{
+		Throughput:     throughput,
+		ThroughputMbps: throughput * 8 / 1000 / 1000,
+		TotalBytes:     totalBytes,
+		Duration:       elapsed.Seconds(),
+	}
+
+	if pingResult != nil && pingResult.Success {
+		result.AvgRTT = pingResult.Latency
+		result.AvgJitter = pingResult.Jitter
+	}
+
+	return result, nil
 }
 
 // RunUDPTest 执行UDP测试（带宽和延迟）
 func (ut *UDPTester) RunUDPTest(serverAddr string, threads int, duration int, targetBandwidth string, localIP string, interfaceName string) error {
-	fmt.Printf("UDP测试参数 - 目标: %s, 线程数: %d, 时长: %d秒", serverAddr, threads, duration)
-	if targetBandwidth != "" {
-		fmt.Printf(", 目标带宽: %s", targetBandwidth)
-	}
-	if localIP != "" {
-		fmt.Printf(", 本地IP: %s", localIP)
-	}
-	if interfaceName != "" {
-		fmt.Printf(", 网络接口: %s", interfaceName)
-	}
-	fmt.Printf("\n")
-
-	// 如果interfaceName为"all"，则对所有在线网络接口进行测试并聚合结果
 	if interfaceName == "all" {
 		return ut.runUDPTestOnAllInterfacesAggregated(serverAddr, threads, duration, targetBandwidth)
 	}
 
-	// 解析UDP地址
-	udpAddr, err := net.ResolveUDPAddr("udp", serverAddr)
+	result, err := ut.RunUDPTestWithResult(serverAddr, threads, duration, targetBandwidth, localIP)
 	if err != nil {
-		return fmt.Errorf("解析UDP地址失败: %v", err)
+		return err
 	}
 
-	// 创建UDP连接
-	conn, err := net.DialUDP("udp", nil, udpAddr)
-	if err != nil {
-		return fmt.Errorf("创建UDP连接失败: %v", err)
-	}
-	defer conn.Close()
-
-	// 执行UDP带宽测试
-	err = ut.runUDPBandwidthTest(conn, threads, duration, targetBandwidth)
-	if err != nil {
-		fmt.Printf("UDP带宽测试失败: %v\n", err)
-	}
-
-	// 提取目标地址用于ping测试
-	addr := conn.RemoteAddr().String()
-	targetHost := addr
-	colonIndex := strings.LastIndex(addr, ":")
-	if colonIndex != -1 {
-		targetHost = addr[:colonIndex]
-	}
-
-	// 执行UDP延迟测试
-	err = ut.runUDPLatencyTest(targetHost)
-	if err != nil {
-		fmt.Printf("UDP延迟测试失败: %v\n", err)
-	}
-
-	// 统一输出所有结果
-	// 如果两个结果都有，则合并输出
-	if ut.bandwidthResult != nil && ut.latencyResult != nil {
-		combinedResult := utils.TestResult{
-			Protocol:   ut.bandwidthResult.Protocol,
-			TestType:   "combined",
-			Direction:  ut.bandwidthResult.Direction,
-			Throughput: ut.bandwidthResult.Throughput,
-			AvgRTT:     ut.latencyResult.AvgRTT,
-			AvgJitter:  ut.latencyResult.AvgJitter,
-			Duration:   ut.bandwidthResult.Duration,
-		}
-		utils.PrintStructuredResult(combinedResult)
-	} else {
-		// 分别输出可用的结果
-		if ut.bandwidthResult != nil {
-			utils.PrintStructuredResult(*ut.bandwidthResult)
-		}
-		if ut.latencyResult != nil {
-			utils.PrintStructuredResult(*ut.latencyResult)
-		}
-	}
+	fmt.Printf("\n========== UDP测试结果 ==========\n")
+	fmt.Printf("吞吐量: %.2f MB/s (%.2f Mbps)\n", result.Throughput/1024/1024, result.ThroughputMbps)
+	fmt.Printf("平均延迟: %.2f ms\n", result.AvgRTT)
+	fmt.Printf("平均抖动: %.2f ms\n", result.AvgJitter)
+	fmt.Printf("总传输字节: %d bytes\n", result.TotalBytes)
+	fmt.Printf("测试时长: %.2f 秒\n", result.Duration)
 
 	return nil
 }
