@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"perfgo/pkg/protocol"
-	"perfgo/pkg/utils"
+	"github.com/TigoTin/perfgo/pkg/protocol"
+	"github.com/TigoTin/perfgo/pkg/utils"
 )
 
 const (

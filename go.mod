@@ -1,4 +1,4 @@
-module perfgo
+module github.com/TigoTin/perfgo
 
 go 1.25.0
 

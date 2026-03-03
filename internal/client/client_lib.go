@@ -3,7 +3,7 @@ package client
 import (
 	"fmt"
 
-	"perfgo/pkg/utils"
+	"github.com/TigoTin/perfgo/pkg/utils"
 )
 
 type TestType string

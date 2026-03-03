@@ -8,9 +8,9 @@ import (
 
 	"github.com/urfave/cli/v2"
 
-	"perfgo/internal/client"
-	"perfgo/internal/server"
-	"perfgo/pkg/utils"
+	"github.com/TigoTin/perfgo/internal/client"
+	"github.com/TigoTin/perfgo/internal/server"
+	"github.com/TigoTin/perfgo/pkg/utils"
 )
 
 func main() {

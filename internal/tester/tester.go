@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"perfgo/pkg/utils"
+	"github.com/TigoTin/perfgo/pkg/utils"
 )
 
 const (

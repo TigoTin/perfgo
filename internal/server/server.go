@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net"
 
-	"perfgo/internal/tester"
-	"perfgo/pkg/protocol"
+	"github.com/TigoTin/perfgo/internal/tester"
+	"github.com/TigoTin/perfgo/pkg/protocol"
 )
 
 // Server 网络测试服务器
