@@ -68,7 +68,7 @@ func RunTest(config TestConfig) (*TestResult, error) {
 	publicIPMap := make(map[string]string)
 	natTypeMap := make(map[string]string)
 	for _, localIP := range config.LocalIPs {
-		natType, publicIP, err := utils.DetectNATType(localIP)
+		natType, publicIP, err := utils.DetectNATTypeForInterface(localIP)
 		if err == nil {
 			natTypeMap[localIP] = natType
 			publicIPMap[localIP] = publicIP

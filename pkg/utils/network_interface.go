@@ -86,8 +86,8 @@ func GetAllNetworkInterfaceDetails() ([]NetworkInterfaceInfo, error) {
 	return results, nil
 }
 
-func DetectNATTypeForInterface(interfaceName, localIP string) (natType, publicIP string, err error) {
-	return detectNATTypeForInterface(interfaceName, localIP)
+func DetectNATTypeForInterface(localIP string) (natType, publicIP string, err error) {
+	return detectNATTypeForInterface("", localIP)
 }
 
 // detectNATTypeForInterface 检测特定接口的NAT类型
