@@ -145,7 +145,7 @@ func detectNATTypeForInterface(interfaceName, localIP string) (natType, publicIP
 		}
 
 		// 成功检测到NAT类型，返回结果
-		return natType, publicIPStr, nil
+		return natType, strings.Split(publicIPStr, ":")[0], nil
 	}
 
 	// 所有STUN服务器都失败
