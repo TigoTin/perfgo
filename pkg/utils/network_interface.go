@@ -86,6 +86,10 @@ func GetAllNetworkInterfaceDetails() ([]NetworkInterfaceInfo, error) {
 	return results, nil
 }
 
+func DetectNATTypeForInterface(interfaceName, localIP string) (natType, publicIP string, err error) {
+	return detectNATTypeForInterface(interfaceName, localIP)
+}
+
 // detectNATTypeForInterface 检测特定接口的NAT类型
 func detectNATTypeForInterface(interfaceName, localIP string) (natType, publicIP string, err error) {
 	// 定义多个STUN服务器，按优先级排列
