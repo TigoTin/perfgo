@@ -132,6 +132,8 @@ func detectNATTypeForInterface(interfaceName, localIP string) (natType, publicIP
 		}
 
 		switch nat {
+		case stun.NATNone:
+			natType = "NAT0"
 		case stun.NATFull:
 			natType = "NAT1"
 		case stun.NATRestricted:
@@ -140,6 +142,10 @@ func detectNATTypeForInterface(interfaceName, localIP string) (natType, publicIP
 			natType = "NAT3"
 		case stun.NATSymetric:
 			natType = "NAT4"
+		case stun.NATBlocked:
+			natType = "NAT5"
+		case stun.SymmetricUDPFirewall:
+			natType = "NAT6"
 		default:
 			natType = "Unknown"
 		}
