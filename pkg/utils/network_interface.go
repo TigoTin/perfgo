@@ -5,8 +5,6 @@ import (
 	"net"
 	"sort"
 	"strings"
-
-	"github.com/ccding/go-stun/stun"
 )
 
 // NetworkInterfaceInfo 网络接口信息结构
@@ -67,16 +65,12 @@ func GetAllNetworkInterfaceDetails() ([]NetworkInterfaceInfo, error) {
 			}
 		}
 
-		// 如果有有效IP且接口在线，检测NAT类型
 		if info.IP != "" && info.IsOnline {
-			natType, publicIP, natErr := detectNATTypeForInterface(info.Name, info.IP)
+			natType, _, natErr := DetectNATType(info.IP)
 			if natErr != nil {
-				// NAT类型检测失败，记录错误但不影响整体流程
 				info.NATType = "Unknown"
 			} else {
 				info.NATType = natType
-				// 可以选择性地保存公网IP信息
-				_ = publicIP
 			}
 		}
 
@@ -84,78 +78,6 @@ func GetAllNetworkInterfaceDetails() ([]NetworkInterfaceInfo, error) {
 	}
 
 	return results, nil
-}
-
-func DetectNATTypeForInterface(localIP string) (natType, publicIP string, err error) {
-	return detectNATTypeForInterface("", localIP)
-}
-
-// detectNATTypeForInterface 检测特定接口的NAT类型
-func detectNATTypeForInterface(interfaceName, localIP string) (natType, publicIP string, err error) {
-	// 定义多个STUN服务器，按优先级排列
-	stunServers := []string{
-		"stun.qcloud.com:3478",
-		"stun.miwifi.com:3478",
-		"stun.ekiga.net:3478",
-		"stun.ideasip.com:3478",
-		"stun.voiparound.com:3478",
-	}
-
-	for _, serverAddr := range stunServers {
-		client := stun.NewClient()
-		// 设置 STUN 服务器
-		client.SetServerAddr(serverAddr)
-
-		// 设置本地IP
-		if localIP != "" {
-			client.SetLocalIP(localIP)
-		}
-
-		nat, pubIP, discoverErr := client.Discover()
-		if discoverErr != nil {
-			// 尝试下一个STUN服务器
-			continue
-		}
-
-		// 检查是否为无效的NAT类型
-		if nat == stun.NATError {
-			// 尝试下一个STUN服务器
-			continue
-		}
-
-		// 处理可能为nil的pubIP
-		var publicIPStr string
-		if pubIP != nil {
-			publicIPStr = pubIP.String()
-		} else {
-			publicIPStr = ""
-		}
-
-		switch nat {
-		case stun.NATNone:
-			natType = "NAT0"
-		case stun.NATFull:
-			natType = "NAT1"
-		case stun.NATRestricted:
-			natType = "NAT2"
-		case stun.NATPortRestricted:
-			natType = "NAT3"
-		case stun.NATSymetric:
-			natType = "NAT4"
-		case stun.NATBlocked:
-			natType = "NAT5"
-		case stun.SymmetricUDPFirewall:
-			natType = "NAT6"
-		default:
-			natType = "Unknown"
-		}
-
-		// 成功检测到NAT类型，返回结果
-		return natType, strings.Split(publicIPStr, ":")[0], nil
-	}
-
-	// 所有STUN服务器都失败
-	return "Unknown", "", fmt.Errorf("无法通过任何STUN服务器检测NAT类型")
 }
 
 // FilterOnlineInterfaces 过滤出已联网的接口

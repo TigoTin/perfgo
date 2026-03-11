@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"net"
 	"time"
-
-	"github.com/ccding/go-stun/stun"
 )
 
 // NetworkCheckResult 网络检测结果结构
@@ -57,12 +55,8 @@ func CheckNetworkInterface(iface net.Interface) NetworkCheckResult {
 	}
 
 	result.IsConnected = true
-
-	// 检测延迟 (ping 一个公共DNS服务器)
 	result.Latency = measureLatency("8.8.8.8")
-
-	// 检测NAT类型
-	result.NATType, result.PublicIP, _ = detectNATTypeByInterface(iface.Name)
+	result.NATType, result.PublicIP, _ = DetectNATType("")
 
 	return result
 }
@@ -77,45 +71,6 @@ func measureLatency(target string) float64 {
 	defer conn.Close()
 	latency := time.Since(start).Seconds() * 1000 // 转换为毫秒
 	return latency
-}
-
-// detectNATTypeByInterface 检测特定接口的NAT类型
-func detectNATTypeByInterface(interfaceName string) (natType, publicIP string, err error) {
-	// 获取指定接口的IP地址
-	iface, err := net.InterfaceByName(interfaceName)
-	if err != nil {
-		return "Unknown", "", err
-	}
-
-	addrs, err := iface.Addrs()
-	if err != nil {
-		return "Unknown", "", err
-	}
-
-	var localIP string
-	for _, addr := range addrs {
-		if ipnet, ok := addr.(*net.IPNet); ok {
-			if ip4 := ipnet.IP.To4(); ip4 != nil {
-				localIP = ip4.String()
-				break
-			}
-		}
-	}
-
-	if localIP == "" {
-		return "Unknown", "", fmt.Errorf("no IPv4 address found for interface %s", interfaceName)
-	}
-
-	client := stun.NewClient()
-	client.SetServerAddr("stun.aliyun.com:3478")
-	client.SetLocalIP(localIP)
-
-	nat, pubIP, discoverErr := client.Discover()
-	if discoverErr != nil {
-		return "Unknown", "", discoverErr
-	}
-
-	return nat.String(), pubIP.String(), nil
 }
 
 // PrintNetworkCheckResults 打印网络检测结果表格

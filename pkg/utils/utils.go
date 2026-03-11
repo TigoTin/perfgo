@@ -43,32 +43,11 @@ func FormatSpeedMbps(bytesPerSec float64) string {
 	return fmt.Sprintf("%.2f Mbps", mbps)
 }
 
-// FormatSpeedDetailed 将速度格式化为人类可读的详细格式，同时显示MB/s和Mbps
+// FormatSpeedDetailed 将速度格式化为人类可读的详细格式，同时显示 MB/s 和 Mbps
 func FormatSpeedDetailed(bytesPerSec float64) string {
 	basicFormat := FormatSpeed(bytesPerSec)
 	mbpsFormat := FormatSpeedMbps(bytesPerSec)
 	return fmt.Sprintf("%s (%s)", basicFormat, mbpsFormat)
-}
-
-// TestResult 测试结果结构
-type TestResult struct {
-	Protocol    string  `json:"protocol"`     // 协议类型 (TCP/UDP)
-	TestType    string  `json:"test_type"`    // 测试类型 (bandwidth/latency)
-	Direction   string  `json:"direction"`    // 方向 (uplink/downlink)
-	Throughput  float64 `json:"throughput"`   // 吞吐量 (bytes/s)
-	AvgRTT      float64 `json:"avg_rtt"`      // 平均往返时间 (ms)
-	AvgJitter   float64 `json:"avg_jitter"`   // 平均抖动 (ms)
-	SuccessRate float64 `json:"success_rate"` // 成功率
-	TotalBytes  int64   `json:"total_bytes"`  // 总字节数
-	Duration    float64 `json:"duration"`     // 持续时间 (秒)
-}
-
-// InterfaceTestResult 带有接口信息的测试结果结构
-type InterfaceTestResult struct {
-	TestResult           // 嵌入基本测试结果
-	InterfaceName string // 网络接口名称
-	NATType       string // NAT类型
-	Error         error  // 错误信息
 }
 
 // PrintStructuredResult 打印结构化测试结果

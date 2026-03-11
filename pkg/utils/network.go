@@ -8,7 +8,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/ccding/go-stun/stun"
 	"github.com/vishvananda/netlink"
 )
 
@@ -127,25 +126,6 @@ func GetAllNetworkAdapterWithRoutes() ([]NetResult, error) {
 	return NicList, nil
 }
 
-// DetectNATType 检测 NAT 类型
-func DetectNATType(localIP string) (natType string, publicIP string, err error) {
-	client := stun.NewClient()
-	// 设置 STUN 服务器
-	client.SetServerAddr("stun.l.google.com:19302")
-
-	// 如果指定了本地IP，设置本地IP
-	if localIP != "" {
-		client.SetLocalIP(localIP)
-	}
-
-	nat, pubIP, discoverErr := client.Discover()
-	if discoverErr != nil {
-		return "Unknown", "", discoverErr
-	}
-
-	return nat.String(), pubIP.String(), nil
-}
-
 // RunCmd 模拟运行命令的函数（实际实现可能在其他地方）
 func RunCmd(cmd string) (string, error) {
 	// 这里应该是实际的命令执行逻辑
@@ -174,12 +154,11 @@ func GetAllNetworkAdapter() ([]NetResult, error) {
 			}
 
 			for _, addr := range addrList {
-				// 跳过回环地址和链路本地地址
 				if !addr.IP.IsLoopback() && !addr.IP.IsLinkLocalUnicast() {
-					natType, publicIP, _ := DetectNATType(addr.IPNet.IP.String())
+					natType, publicIP, _ := DetectNATType(addr.IP.String())
 					nic := NetResult{
 						Name:        attrs.Name,
-						InAddressV4: addr.IPNet.IP.String(),
+						InAddressV4: addr.IP.String(),
 						Mac:         attrs.HardwareAddr.String(),
 						NATType:     natType,
 						PublicIP:    publicIP,
