@@ -30,14 +30,19 @@ type InterfaceTestResult struct {
 	Error         error  // 错误信息
 }
 
+// ServerConfig 服务端配置
+type ServerConfig struct {
+	Addr      string `json:"addr"`      // 服务端地址 (IP:端口)
+	Bandwidth string `json:"bandwidth"` // 目标带宽，如 "10M"，仅UDP有效
+}
+
 // TestConfig 测试配置结构
 type TestConfig struct {
-	ServerAddr  string   `json:"server_addr"` // 服务端地址 (IP:端口)
-	LocalIPs    []string `json:"local_ips"`    // 本地网卡IP列表 (支持多个)
-	Duration    int      `json:"duration"`     // 测试持续时间 (秒)
-	Concurrency int      `json:"concurrency"`  // 并发连接数
-	TestType    TestType `json:"test_type"`    // 测试类型: tcp 或 udp
-	Bandwidth   string   `json:"bandwidth"`    // 仅UDP有效，目标带宽如 "10M"
+	Servers     []ServerConfig `json:"servers"`     // 服务端配置列表
+	LocalIPs    []string       `json:"local_ips"`   // 本地网卡IP列表 (支持多个)
+	Duration    int            `json:"duration"`    // 测试持续时间 (秒)
+	Concurrency int            `json:"concurrency"` // 并发连接数
+	TestType    TestType       `json:"test_type"`   // 测试类型: tcp 或 udp
 }
 
 // InterfaceResult 单个接口的测试结果

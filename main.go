@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/urfave/cli/v2"
@@ -55,16 +56,20 @@ func main() {
 				Usage:   "执行TCP网络测试（带宽和延迟）",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
-						Name:     "host",
-						Value:    "localhost",
-						Usage:    "服务器主机地址",
-						Required: true,
+						Name:  "host",
+						Value: "",
+						Usage: "服务器主机地址 (单个服务器)",
 					},
 					&cli.StringFlag{
 						Name:    "port",
 						Value:   "5432",
 						Usage:   "服务器端口",
 						Aliases: []string{"p"},
+					},
+					&cli.StringFlag{
+						Name:  "servers",
+						Value: "",
+						Usage: "多服务端地址，格式: host1:port1,host2:port2 (可选，可指定带宽 host:port/bandwidth 如 1.2.3.4:5432/10M)",
 					},
 					&cli.IntFlag{
 						Name:    "connections",
@@ -99,16 +104,20 @@ func main() {
 				Usage:   "执行UDP网络测试（带宽和延迟）",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
-						Name:     "host",
-						Value:    "localhost",
-						Usage:    "服务器主机地址",
-						Required: true,
+						Name:  "host",
+						Value: "",
+						Usage: "服务器主机地址 (单个服务器)",
 					},
 					&cli.StringFlag{
 						Name:    "port",
 						Value:   "5432",
 						Usage:   "服务器端口",
 						Aliases: []string{"p"},
+					},
+					&cli.StringFlag{
+						Name:  "servers",
+						Value: "",
+						Usage: "多服务端地址，格式: host1:port1,host2:port2 (可选，可指定带宽 host:port/bandwidth 如 1.2.3.4:5432/10M)",
 					},
 					&cli.IntFlag{
 						Name:    "connections",
@@ -205,32 +214,150 @@ func serverAction(cCtx *cli.Context) error {
 }
 
 func tcpTestAction(cCtx *cli.Context) error {
-	host := cCtx.String("host")
-	port := cCtx.String("port")
+	serversStr := cCtx.String("servers")
 	connections := cCtx.Int("connections")
 	duration := cCtx.Int("duration")
 	localIP := cCtx.String("localip")
 	interfaceName := cCtx.String("interface")
 
-	serverAddr := fmt.Sprintf("%s:%s", host, port)
+	var servers []utils.ServerConfig
+	if serversStr != "" {
+		servers = parseServers(serversStr)
+	} else {
+		host := cCtx.String("host")
+		port := cCtx.String("port")
+		if host == "" {
+			return fmt.Errorf("请指定服务端地址 (--host 或 --servers)")
+		}
+		if port == "" {
+			port = "5432"
+		}
+		servers = []utils.ServerConfig{{Addr: fmt.Sprintf("%s:%s", host, port)}}
+	}
+
+	if len(servers) == 0 {
+		return fmt.Errorf("服务端地址不能为空")
+	}
+
 	tester := client.NewTCPTester()
 
-	return tester.RunTCPTest(serverAddr, connections, duration, localIP, interfaceName)
+	if interfaceName == "all" {
+		return tester.RunTCPTestOnAllInterfaces(servers, connections, duration)
+	}
+
+	config := utils.TestConfig{
+		Servers:     servers,
+		LocalIPs:    []string{localIP},
+		Duration:    duration,
+		Concurrency: connections,
+		TestType:    utils.TestTypeTCP,
+	}
+
+	result, err := client.RunTest(config)
+	if err != nil {
+		return err
+	}
+
+	printInterfaceResults(result.Results)
+	return nil
+}
+
+func parseServers(serversStr string) []utils.ServerConfig {
+	var servers []utils.ServerConfig
+	parts := strings.Split(serversStr, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		var server utils.ServerConfig
+		bandwidthParts := strings.Split(part, "/")
+		addrPart := bandwidthParts[0]
+
+		if len(bandwidthParts) > 1 {
+			server.Bandwidth = bandwidthParts[1]
+		}
+
+		hostPort := strings.Split(addrPart, ":")
+		if len(hostPort) == 2 {
+			server.Addr = addrPart
+		} else {
+			server.Addr = addrPart + ":5432"
+		}
+
+		servers = append(servers, server)
+	}
+	return servers
+}
+
+func printInterfaceResults(results []utils.InterfaceResult) {
+	for _, r := range results {
+		if !r.Success {
+			fmt.Printf("接口 %s: 测试失败 - %s\n", r.LocalIP, r.Error)
+			continue
+		}
+		fmt.Printf("\n========== %s 测试结果 ==========\n", r.InterfaceName)
+		fmt.Printf("本地 IP: %s\n", r.LocalIP)
+		fmt.Printf("NAT 类型: %s\n", r.NATType)
+		fmt.Printf("公网 IP: %s\n", r.PublicIP)
+		fmt.Printf("吞吐量: %.2f MB/s (%.2f Mbps)\n", r.Throughput/1024/1024, r.ThroughputMbps)
+		fmt.Printf("平均延迟: %.2f ms\n", r.AvgRTT)
+		fmt.Printf("平均抖动: %.2f ms\n", r.AvgJitter)
+		fmt.Printf("丢包率: %.2f%%\n", r.PacketLoss)
+		fmt.Printf("总传输: %d bytes\n", r.TotalBytes)
+		fmt.Printf("测试时长: %.2f 秒\n", r.Duration)
+	}
 }
 
 func udpTestAction(cCtx *cli.Context) error {
-	host := cCtx.String("host")
-	port := cCtx.String("port")
+	serversStr := cCtx.String("servers")
 	connections := cCtx.Int("connections")
 	duration := cCtx.Int("duration")
 	bandwidth := cCtx.String("bandwidth")
 	localIP := cCtx.String("localip")
 	interfaceName := cCtx.String("interface")
 
-	serverAddr := fmt.Sprintf("%s:%s", host, port)
+	var servers []utils.ServerConfig
+	if serversStr != "" {
+		servers = parseServers(serversStr)
+	} else {
+		host := cCtx.String("host")
+		port := cCtx.String("port")
+		if host == "" {
+			return fmt.Errorf("请指定服务端地址 (--host 或 --servers)")
+		}
+		if port == "" {
+			port = "5432"
+		}
+		servers = []utils.ServerConfig{{Addr: fmt.Sprintf("%s:%s", host, port), Bandwidth: bandwidth}}
+	}
+
+	if len(servers) == 0 {
+		return fmt.Errorf("服务端地址不能为空")
+	}
+
 	tester := client.NewUDPTester()
 
-	return tester.RunUDPTest(serverAddr, connections, duration, bandwidth, localIP, interfaceName)
+	if interfaceName == "all" {
+		return tester.RunUDPTestOnAllInterfaces(servers, connections, duration)
+	}
+
+	config := utils.TestConfig{
+		Servers:     servers,
+		LocalIPs:    []string{localIP},
+		Duration:    duration,
+		Concurrency: connections,
+		TestType:    utils.TestTypeUDP,
+	}
+
+	result, err := client.RunTest(config)
+	if err != nil {
+		return err
+	}
+
+	printInterfaceResults(result.Results)
+	return nil
 }
 
 func interfaceInfoAction(cCtx *cli.Context) error {

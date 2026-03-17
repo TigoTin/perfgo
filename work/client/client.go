@@ -306,6 +306,48 @@ func (ct *TCPTester) runTestOnAllInterfacesAggregated(serverAddr string, connect
 	return nil
 }
 
+func (ct *TCPTester) RunTCPTestOnAllInterfaces(servers []utils.ServerConfig, connections int, duration int) error {
+	fmt.Println("正在获取所有在线网络接口...")
+	interfaces, err := utils.GetOnlineNetworkInterfaces()
+	if err != nil {
+		return fmt.Errorf("获取在线网络接口失败：%v", err)
+	}
+
+	if len(interfaces) == 0 {
+		return fmt.Errorf("未找到任何在线网络接口")
+	}
+
+	fmt.Printf("发现 %d 个在线网络接口，%d 个服务端，开始测试:\n\n", len(interfaces), len(servers))
+
+	for i, iface := range interfaces {
+		fmt.Printf("=== 测试第 %d/%d 个网络接口：%s (IP: %s, NAT 类型：%s) ===\n",
+			i+1, len(interfaces), iface.Name, iface.IP, iface.NATType)
+
+		config := utils.TestConfig{
+			Servers:     servers,
+			LocalIPs:    []string{iface.IP},
+			Duration:    duration,
+			Concurrency: connections,
+			TestType:    utils.TestTypeTCP,
+		}
+
+		result, err := RunTest(config)
+		if err != nil {
+			fmt.Printf("接口 %s 测试失败：%v\n", iface.Name, err)
+			continue
+		}
+
+		if len(result.Results) > 0 {
+			r := result.Results[0]
+			fmt.Printf("吞吐量: %.2f Mbps, 延迟: %.2f ms, 抖动: %.2f ms, 丢包率: %.2f%%\n",
+				r.ThroughputMbps, r.AvgRTT, r.AvgJitter, r.PacketLoss)
+		}
+		fmt.Println()
+	}
+
+	return nil
+}
+
 func (ct *TCPTester) runTCPInterfaceTest(localIP, serverAddr string, connections, duration int) ([]connResult, error) {
 	resultChan := make(chan connResult, connections)
 	var wg sync.WaitGroup

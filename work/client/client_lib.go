@@ -2,6 +2,7 @@ package client
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/TigoTin/perfgo/pkg/utils"
 )
@@ -13,7 +14,7 @@ func RunTest(config utils.TestConfig) (*utils.TestResultSummary, error) {
 	if config.Concurrency <= 0 {
 		config.Concurrency = 1
 	}
-	if config.ServerAddr == "" {
+	if len(config.Servers) == 0 {
 		return nil, fmt.Errorf("服务端地址不能为空")
 	}
 
@@ -73,9 +74,9 @@ func executeTestForInterface(localIP string, config utils.TestConfig, interfaceI
 
 	switch config.TestType {
 	case utils.TestTypeTCP:
-		executeTCPTest(&interfaceResult, localIP, config)
+		executeMultiServerTCPTest(&interfaceResult, localIP, config)
 	case utils.TestTypeUDP:
-		executeUDPTest(&interfaceResult, localIP, config)
+		executeMultiServerUDPTest(&interfaceResult, localIP, config)
 	default:
 		interfaceResult.Success = false
 		interfaceResult.Error = fmt.Sprintf("不支持的测试类型：%s", config.TestType)
@@ -84,50 +85,172 @@ func executeTestForInterface(localIP string, config utils.TestConfig, interfaceI
 	return interfaceResult
 }
 
-func executeTCPTest(result *utils.InterfaceResult, localIP string, config utils.TestConfig) error {
-	tcpResult, err := runTCPTest(localIP, config.ServerAddr, config.Concurrency, config.Duration)
-	if err != nil {
+func executeMultiServerTCPTest(result *utils.InterfaceResult, localIP string, config utils.TestConfig) {
+	servers := config.Servers
+	if len(servers) == 0 {
 		result.Success = false
-		result.Error = err.Error()
-		return err
+		result.Error = "服务端列表为空"
+		return
+	}
+
+	type tcpRes struct {
+		result *TCPTestResult
+		err    error
+	}
+
+	resultChan := make(chan tcpRes, len(servers))
+	var wg sync.WaitGroup
+
+	for _, server := range servers {
+		wg.Add(1)
+		go func(addr string) {
+			defer wg.Done()
+			tester := NewTCPTester()
+			tcpResult, err := tester.RunTCPTestWithResult(addr, config.Concurrency, config.Duration, localIP)
+			resultChan <- tcpRes{result: tcpResult, err: err}
+		}(server.Addr)
+	}
+
+	wg.Wait()
+	close(resultChan)
+
+	var totalThroughput float64
+	var totalBytes int64
+	var totalDuration float64
+	var successCount int
+	var rttSum, jitterSum, packetLossSum float64
+	var rttCount, jitterCount, packetLossCount int
+
+	for r := range resultChan {
+		if r.err != nil {
+			continue
+		}
+		if r.result != nil {
+			totalThroughput += r.result.Throughput
+			totalBytes += r.result.TotalBytes
+			totalDuration += r.result.Duration
+			successCount++
+
+			if r.result.AvgRTT > 0 {
+				rttSum += r.result.AvgRTT
+				rttCount++
+			}
+			if r.result.AvgJitter > 0 {
+				jitterSum += r.result.AvgJitter
+				jitterCount++
+			}
+			if r.result.PacketLoss >= 0 {
+				packetLossSum += r.result.PacketLoss
+				packetLossCount++
+			}
+		}
+	}
+
+	if successCount == 0 {
+		result.Success = false
+		result.Error = "所有服务端测试均失败"
+		return
 	}
 
 	result.Success = true
-	result.Throughput = tcpResult.Throughput
-	result.ThroughputMbps = tcpResult.ThroughputMbps
-	result.AvgRTT = tcpResult.AvgRTT
-	result.AvgJitter = tcpResult.AvgJitter
-	result.TotalBytes = tcpResult.TotalBytes
-	result.Duration = tcpResult.Duration
-	result.PacketLoss = tcpResult.PacketLoss
-	return nil
+	result.Throughput = totalThroughput
+	result.ThroughputMbps = totalThroughput * 8 / 1000 / 1000
+	result.TotalBytes = totalBytes
+	if successCount > 0 {
+		result.Duration = totalDuration / float64(successCount)
+	}
+	if rttCount > 0 {
+		result.AvgRTT = rttSum / float64(rttCount)
+	}
+	if jitterCount > 0 {
+		result.AvgJitter = jitterSum / float64(jitterCount)
+	}
+	if packetLossCount > 0 {
+		result.PacketLoss = packetLossSum / float64(packetLossCount)
+	}
 }
 
-func executeUDPTest(result *utils.InterfaceResult, localIP string, config utils.TestConfig) error {
-	udpResult, err := runUDPTest(localIP, config.ServerAddr, config.Concurrency, config.Duration, config.Bandwidth)
-	if err != nil {
+func executeMultiServerUDPTest(result *utils.InterfaceResult, localIP string, config utils.TestConfig) {
+	servers := config.Servers
+	if len(servers) == 0 {
 		result.Success = false
-		result.Error = err.Error()
-		return err
+		result.Error = "服务端列表为空"
+		return
+	}
+
+	type udpRes struct {
+		result *UDPTestResult
+		err    error
+	}
+
+	resultChan := make(chan udpRes, len(servers))
+	var wg sync.WaitGroup
+
+	for _, server := range servers {
+		wg.Add(1)
+		go func(addr, bandwidth string) {
+			defer wg.Done()
+			tester := NewUDPTester()
+			udpResult, err := tester.RunUDPTestWithResult(addr, config.Concurrency, config.Duration, bandwidth, localIP)
+			resultChan <- udpRes{result: udpResult, err: err}
+		}(server.Addr, server.Bandwidth)
+	}
+
+	wg.Wait()
+	close(resultChan)
+
+	var totalThroughput float64
+	var totalBytes int64
+	var totalDuration float64
+	var successCount int
+	var rttSum, jitterSum, packetLossSum float64
+	var rttCount, jitterCount, packetLossCount int
+
+	for r := range resultChan {
+		if r.err != nil {
+			continue
+		}
+		if r.result != nil {
+			totalThroughput += r.result.Throughput
+			totalBytes += r.result.TotalBytes
+			totalDuration += r.result.Duration
+			successCount++
+
+			if r.result.AvgRTT > 0 {
+				rttSum += r.result.AvgRTT
+				rttCount++
+			}
+			if r.result.AvgJitter > 0 {
+				jitterSum += r.result.AvgJitter
+				jitterCount++
+			}
+			if r.result.PacketLoss >= 0 {
+				packetLossSum += r.result.PacketLoss
+				packetLossCount++
+			}
+		}
+	}
+
+	if successCount == 0 {
+		result.Success = false
+		result.Error = "所有服务端测试均失败"
+		return
 	}
 
 	result.Success = true
-	result.Throughput = udpResult.Throughput
-	result.ThroughputMbps = udpResult.ThroughputMbps
-	result.AvgRTT = udpResult.AvgRTT
-	result.AvgJitter = udpResult.AvgJitter
-	result.TotalBytes = udpResult.TotalBytes
-	result.Duration = udpResult.Duration
-	result.PacketLoss = udpResult.PacketLoss
-	return nil
-}
-
-func runTCPTest(localIP, serverAddr string, connections, duration int) (*TCPTestResult, error) {
-	tester := NewTCPTester()
-	return tester.RunTCPTestWithResult(serverAddr, connections, duration, localIP)
-}
-
-func runUDPTest(localIP, serverAddr string, connections, duration int, bandwidth string) (*UDPTestResult, error) {
-	tester := NewUDPTester()
-	return tester.RunUDPTestWithResult(serverAddr, connections, duration, bandwidth, localIP)
+	result.Throughput = totalThroughput
+	result.ThroughputMbps = totalThroughput * 8 / 1000 / 1000
+	result.TotalBytes = totalBytes
+	if successCount > 0 {
+		result.Duration = totalDuration / float64(successCount)
+	}
+	if rttCount > 0 {
+		result.AvgRTT = rttSum / float64(rttCount)
+	}
+	if jitterCount > 0 {
+		result.AvgJitter = jitterSum / float64(jitterCount)
+	}
+	if packetLossCount > 0 {
+		result.PacketLoss = packetLossSum / float64(packetLossCount)
+	}
 }
