@@ -16,8 +16,20 @@ func RunTest(config utils.TestConfig) (*utils.TestResultSummary, error) {
 	if config.ServerAddr == "" {
 		return nil, fmt.Errorf("服务端地址不能为空")
 	}
+
 	if len(config.LocalIPs) == 0 {
-		return nil, fmt.Errorf("本地网卡 IP 列表不能为空")
+		onlineInterfaces, err := utils.GetOnlineNetworkInterfaces()
+		if err != nil {
+			return nil, fmt.Errorf("获取在线网卡失败：%v", err)
+		}
+		for _, iface := range onlineInterfaces {
+			if iface.IP != "" {
+				config.LocalIPs = append(config.LocalIPs, iface.IP)
+			}
+		}
+		if len(config.LocalIPs) == 0 {
+			return nil, fmt.Errorf("未找到任何在线网卡")
+		}
 	}
 
 	interfaceInfoMap := buildInterfaceInfoMap()
@@ -87,6 +99,7 @@ func executeTCPTest(result *utils.InterfaceResult, localIP string, config utils.
 	result.AvgJitter = tcpResult.AvgJitter
 	result.TotalBytes = tcpResult.TotalBytes
 	result.Duration = tcpResult.Duration
+	result.PacketLoss = tcpResult.PacketLoss
 	return nil
 }
 
@@ -105,6 +118,7 @@ func executeUDPTest(result *utils.InterfaceResult, localIP string, config utils.
 	result.AvgJitter = udpResult.AvgJitter
 	result.TotalBytes = udpResult.TotalBytes
 	result.Duration = udpResult.Duration
+	result.PacketLoss = udpResult.PacketLoss
 	return nil
 }
 

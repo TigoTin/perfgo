@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/urfave/cli/v2"
 
@@ -142,6 +143,44 @@ func main() {
 					return udpTestAction(cCtx)
 				},
 			},
+			{
+				Name:    "loss",
+				Aliases: []string{"l"},
+				Usage:   "执行UDP丢包率测试",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "host",
+						Value:    "localhost",
+						Usage:    "服务器主机地址",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:    "port",
+						Value:   "5432",
+						Usage:   "服务器端口",
+						Aliases: []string{"p"},
+					},
+					&cli.IntFlag{
+						Name:    "packets",
+						Value:   100,
+						Usage:   "发送的数据包数量",
+						Aliases: []string{"n"},
+					},
+					&cli.IntFlag{
+						Name:  "size",
+						Value: 1024,
+						Usage: "数据包大小（字节）",
+					},
+					&cli.StringFlag{
+						Name:  "localip",
+						Value: "",
+						Usage: "本地IP地址 (可选，用于指定源IP进行测试)",
+					},
+				},
+				Action: func(cCtx *cli.Context) error {
+					return packetLossTestAction(cCtx)
+				},
+			},
 		},
 	}
 
@@ -203,6 +242,41 @@ func interfaceInfoAction(cCtx *cli.Context) error {
 
 	fmt.Println("\n已联网的网络接口信息:")
 	utils.PrintNetworkInterfaceInfo(onlineInterfaces)
+
+	return nil
+}
+
+func packetLossTestAction(cCtx *cli.Context) error {
+	host := cCtx.String("host")
+	port := cCtx.String("port")
+	packets := cCtx.Int("packets")
+	packetSize := cCtx.Int("size")
+	localIP := cCtx.String("localip")
+
+	serverAddr := fmt.Sprintf("%s:%s", host, port)
+
+	if localIP != "" {
+		fmt.Printf("使用本地 IP: %s\n", localIP)
+	}
+
+	fmt.Printf("\n========== UDP 丢包率测试 ==========\n")
+	fmt.Printf("目标地址: %s\n", serverAddr)
+	fmt.Printf("数据包数量: %d\n", packets)
+	fmt.Printf("数据包大小: %d 字节\n", packetSize)
+	fmt.Println("=====================================\n")
+
+	result, err := utils.TestUDPPacketLoss(serverAddr, packets, packetSize, 3*time.Second)
+	if err != nil {
+		return fmt.Errorf("丢包率测试失败：%v", err)
+	}
+
+	fmt.Printf("发送数据包: %d\n", result.PacketsSent)
+	fmt.Printf("接收数据包: %d\n", result.PacketsReceived)
+	fmt.Printf("丢包率: %.2f%%\n", result.PacketLoss)
+	fmt.Printf("平均延迟: %.2f ms\n", result.AvgLatency)
+	fmt.Printf("最小延迟: %.2f ms\n", result.MinLatency)
+	fmt.Printf("最大延迟: %.2f ms\n", result.MaxLatency)
+	fmt.Printf("抖动: %.2f ms\n", result.Jitter)
 
 	return nil
 }

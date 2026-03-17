@@ -53,6 +53,7 @@ func printTCPTestResult(result *TCPTestResult, connections int) {
 	fmt.Printf("吞吐量：%.2f MB/s (%.2f Mbps)\n", result.Throughput/1024/1024, result.ThroughputMbps)
 	fmt.Printf("平均延迟：%.2f ms\n", result.AvgRTT)
 	fmt.Printf("平均抖动：%.2f ms\n", result.AvgJitter)
+	fmt.Printf("丢包率：%.2f%%\n", result.PacketLoss)
 	fmt.Printf("总传输字节：%d bytes\n", result.TotalBytes)
 	fmt.Printf("测试时长：%.2f 秒\n", result.Duration)
 }
@@ -140,7 +141,7 @@ func (ct *TCPTester) runParallelTests(conn net.Conn, targetHost string, duration
 func (ct *TCPTester) aggregateResults(resultChan <-chan connResult) (*TCPTestResult, error) {
 	var totalBytes int64
 	var totalDuration float64
-	var latencies, jitters []float64
+	var latencies, jitters, packetLosses []float64
 	successCount := 0
 
 	for result := range resultChan {
@@ -155,6 +156,7 @@ func (ct *TCPTester) aggregateResults(resultChan <-chan connResult) (*TCPTestRes
 		if result.latency != nil {
 			latencies = append(latencies, result.latency.AvgRTT)
 			jitters = append(jitters, result.latency.AvgJitter)
+			packetLosses = append(packetLosses, result.latency.PacketLoss)
 		}
 	}
 
@@ -162,10 +164,15 @@ func (ct *TCPTester) aggregateResults(resultChan <-chan connResult) (*TCPTestRes
 		return nil, fmt.Errorf("所有连接均失败")
 	}
 
-	return buildTCPTestResult(totalBytes, totalDuration, float64(successCount), latencies, jitters), nil
+	var avgPacketLoss float64
+	if len(packetLosses) > 0 {
+		avgPacketLoss = sumFloat64(packetLosses) / float64(len(packetLosses))
+	}
+
+	return buildTCPTestResult(totalBytes, totalDuration, float64(successCount), latencies, jitters, avgPacketLoss), nil
 }
 
-func buildTCPTestResult(totalBytes int64, totalDuration, successCount float64, latencies, jitters []float64) *TCPTestResult {
+func buildTCPTestResult(totalBytes int64, totalDuration, successCount float64, latencies, jitters []float64, packetLoss float64) *TCPTestResult {
 	avgDuration := totalDuration / successCount
 	throughput := float64(totalBytes) / avgDuration
 
@@ -180,6 +187,7 @@ func buildTCPTestResult(totalBytes int64, totalDuration, successCount float64, l
 		ThroughputMbps: throughput * 8 / 1000 / 1000,
 		AvgRTT:         avgRTT,
 		AvgJitter:      avgJitter,
+		PacketLoss:     packetLoss,
 		TotalBytes:     totalBytes,
 		Duration:       avgDuration,
 	}
@@ -198,6 +206,7 @@ type TCPTestResult struct {
 	ThroughputMbps float64
 	AvgRTT         float64
 	AvgJitter      float64
+	PacketLoss     float64
 	TotalBytes     int64
 	Duration       float64
 }
@@ -256,6 +265,7 @@ func (ct *TCPTester) runLatencyTest(target string) (*utils.TestResult, error) {
 		AvgJitter:   pingResult.Jitter,
 		SuccessRate: (100 - pingResult.PacketLoss) / 100,
 		Duration:    pingResult.Latency * DefaultPingCount,
+		PacketLoss:  pingResult.PacketLoss,
 	}, nil
 }
 

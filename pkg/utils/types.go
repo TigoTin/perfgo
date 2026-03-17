@@ -17,6 +17,7 @@ type TestResult struct {
 	AvgRTT      float64 `json:"avg_rtt"`      // 平均往返时间 (ms)
 	AvgJitter   float64 `json:"avg_jitter"`   // 平均抖动 (ms)
 	SuccessRate float64 `json:"success_rate"` // 成功率
+	PacketLoss  float64 `json:"packet_loss"`  // 丢包率 (%)
 	TotalBytes  int64   `json:"total_bytes"`  // 总字节数
 	Duration    float64 `json:"duration"`     // 持续时间 (秒)
 }
@@ -32,11 +33,11 @@ type InterfaceTestResult struct {
 // TestConfig 测试配置结构
 type TestConfig struct {
 	ServerAddr  string   `json:"server_addr"` // 服务端地址 (IP:端口)
-	LocalIPs    []string `json:"local_ips"`   // 本地网卡IP列表 (支持多个)
-	Duration    int      `json:"duration"`    // 测试持续时间 (秒)
-	Concurrency int      `json:"concurrency"` // 并发连接数
-	TestType    TestType `json:"test_type"`   // 测试类型: tcp 或 udp
-	Bandwidth   string   `json:"bandwidth"`   // 仅UDP有效，目标带宽如 "10M"
+	LocalIPs    []string `json:"local_ips"`    // 本地网卡IP列表 (支持多个)
+	Duration    int      `json:"duration"`     // 测试持续时间 (秒)
+	Concurrency int      `json:"concurrency"`  // 并发连接数
+	TestType    TestType `json:"test_type"`    // 测试类型: tcp 或 udp
+	Bandwidth   string   `json:"bandwidth"`    // 仅UDP有效，目标带宽如 "10M"
 }
 
 // InterfaceResult 单个接口的测试结果
@@ -51,6 +52,7 @@ type InterfaceResult struct {
 	ThroughputMbps float64 `json:"throughput_mbps"` // 吞吐量 (Mbps)
 	AvgRTT         float64 `json:"avg_rtt_ms"`      // 平均延迟 (ms)
 	AvgJitter      float64 `json:"avg_jitter_ms"`   // 平均抖动 (ms)
+	PacketLoss     float64 `json:"packet_loss"`     // 丢包率 (%)
 	TotalBytes     int64   `json:"total_bytes"`     // 总传输字节数
 	Duration       float64 `json:"duration_sec"`    // 测试持续时间 (秒)
 }

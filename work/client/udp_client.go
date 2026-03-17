@@ -27,6 +27,7 @@ type UDPTestResult struct {
 	ThroughputMbps float64
 	AvgRTT         float64
 	AvgJitter      float64
+	PacketLoss     float64
 	TotalBytes     int64
 	Duration       float64
 }
@@ -50,6 +51,7 @@ func printUDPTestResult(result *UDPTestResult) {
 	fmt.Printf("吞吐量：%.2f MB/s (%.2f Mbps)\n", result.Throughput/1024/1024, result.ThroughputMbps)
 	fmt.Printf("平均延迟：%.2f ms\n", result.AvgRTT)
 	fmt.Printf("平均抖动：%.2f ms\n", result.AvgJitter)
+	fmt.Printf("丢包率：%.2f%%\n", result.PacketLoss)
 	fmt.Printf("总传输字节：%d bytes\n", result.TotalBytes)
 	fmt.Printf("测试时长：%.2f 秒\n", result.Duration)
 }
@@ -106,6 +108,7 @@ func (ut *UDPTester) RunUDPTestWithResult(serverAddr string, threads int, durati
 	if pingResult != nil && pingResult.Success {
 		result.AvgRTT = pingResult.Latency
 		result.AvgJitter = pingResult.Jitter
+		result.PacketLoss = pingResult.PacketLoss
 	}
 
 	return result, nil
